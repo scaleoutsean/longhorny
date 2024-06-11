@@ -23,7 +23,7 @@
 
 # Longhorny
 
-Longhorny is a script for SolidFire storage replication-related management. 
+Longhorny is a CLI tool for SolidFire storage replication-related management. 
 
 It grew out of my need to list cluster and volume pairs - which is something I've desired to add to [SFC v2](https://github.com/solidfire/sfc) - and other necessary and unnecessary stuff that was added as I got carried away. 
 
@@ -33,13 +33,13 @@ The code in this repository is permissively licensed, so feel free to use and mo
 
 Quite a few things and most of them sort of work. Examples:
 
-- Pair two clusters for replication. Also list, and unpair (if they have no paired volumes between them)
+- Pair two clusters for replication. Also list and unpair (if they have no paired volumes between them).
 - Pair one or more volume pairs for replication. Also list and unpair (one pair at a time).
-- Find mismatched volume pairs 
-- Take a snapshot of all volumes at the source
-- Reverse replication direction for all paired volumes 
-- Change replication mode for all or selected volumes (at the source)
-- Prime the remote site from a list of volumes from the source site
+- Find mismatched volume pairs.
+- Take a snapshot of all volumes at the source.
+- Reverse replication direction for all paired volumes.
+- Change replication mode for all or selected volumes (at the source).
+- Prime the remote site using a list of volumes from the source site.
 
 Each of these actions takes 1-2 seconds, so if you have a tidy and organized environment that isn't yet automated, Longhorny can hopefully save you some time. 
 
@@ -236,7 +236,7 @@ options:
                  SRC->DST replication.
 ```
 
-TODO: `detach-site` attempts to remove replication configuration from --src (`--src SRC`). 
+TODO: `detach-site` attempts to remove all replication configuration from --src (`--src SRC`).
 
 `set-access` changes access mode on volumes paired for replication **at the source**. To change access mode for the other site, use `--src OTHER`. 
 
