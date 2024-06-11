@@ -49,11 +49,13 @@ The same goes for site failover and failback. 10 seconds to failover, 10 seconds
 
 ## What you **need to know**
 
-**The recommended action is `--list`**, while the rest may or may not work for you. While basic care has been taken to avoid creating problems, I am the only person who wrote and tested this script so far, so I wouldn't run configuration-modifying actions against production clusters without prior testing. I myself only need the `list` action - okay, I need `mismatch` and `report` as well - while the others were added as convenience but may not be rock-solid.
+**The recommended action is `--list`**, while the rest may or may not work for you. While basic care has been taken to avoid creating problems, I am the only person who wrote and tested this script so far, so I wouldn't run configuration-modifying actions against production clusters without prior testing. I myself only need the `list` action - okay, I need `mismatched` and `report` actions as well - while the others were added as convenience but may not be rock-solid.
 
 Longhorny is is **limited to supporting a simple 1-to-1, exclusively paired clusters**. One SRC cluster, one DST cluster, one pairing. It is expected to reject actions when it spots either the source or the destination has another cluster relationship, so in order to work with multiple clusters you'd have to modify the code.
 
 Longhorny presently **requires that API access to both sites be available**. If one site is down or unreachable, you may use [PowerShell commands](#powershell-to-help) to quickly force changes of the surviving site. Of course, you may also modify the source code to not attempt connecting to the remote SolidFire cluster and use Python functions in the code on only one side.
+
+Currently Longhorny is not opinionated on **volume ownership**, to make experimentation easy and possible out-of-box. Since the administrator can't control account IDs, it's expected that each site will have a different account ID. But, what happens if we have multiple application clusters and need to use replicate volumes that belong to multiple accounts? Longhorny doesn't prevent you from doing it: if you tell it to pair volume SRC/10 and DST/20, it'll do it. Or if you tell it to prime SRC Vol ID 100 that belongs to account SRC/1 for destination the account ID 7, and another from SRC/2 for DST/8, it will do that too. Then you'll have some paired volumes owned by multiple tenants. SO far, so good. But when you reverse replication or take a "site" snapshot, all volumes will be impacted as Longhorny doesn't distinguish between accounts or volume naming patterns. So at that point Longhorny can't help you perform account scoped actions and you'd have to improve it to be able to do that, or perform such actions outside of Longhorny.
 
 ## Production use
 
