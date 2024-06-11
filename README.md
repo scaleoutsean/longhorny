@@ -1,13 +1,16 @@
 - [Longhorny](#longhorny)
+  - [What can it do?](#what-can-it-do)
   - [What you **need to know**](#what-you-need-to-know)
   - [Production use](#production-use)
   - [Objectives](#objectives)
   - [Requirements](#requirements)
   - [How to run](#how-to-run)
+    - [Optional data](#optional-data)
     - [Cluster-scope actions](#cluster-scope-actions)
     - [Volume-scope actions](#volume-scope-actions)
     - [Site-scope actions](#site-scope-actions)
   - [Command examples](#command-examples)
+    - [Some --data examples](#some---data-examples)
     - [Cluster](#cluster)
   - [Volume](#volume)
   - [Miscellaneous stuff](#miscellaneous-stuff)
@@ -26,11 +29,31 @@ It grew out of my need to list cluster and volume pairs - which is something I'v
 
 The code in this repository is permissively licensed, so feel free to use and modify within the terms of the permissive Apache License 2.0. With a bit of extra work you could use the elements of this script to modify it for multi-relationship clusters or other purposes (e.g. send these to Splunk, etc.).
 
+## What can it do?
+
+Quite a few things and most of them sort of work. Examples:
+
+- Pair two clusters for replication. Also list, and unpair (if they have no paired volumes between them)
+- Pair one or more volume pairs for replication. Also list and unpair (one pair at a time).
+- Find mismatched volume pairs 
+- Take a snapshot of all volumes at the source
+- Reverse replication direction for all paired volumes 
+- Change replication mode for all or selected volumes (at the source)
+- Prime the remote site from a list of volumes from the source site
+
+Each of these actions takes 1-2 seconds, so if you have a tidy and organized environment that isn't yet automated, Longhorny can hopefully save you some time. 
+
+With Longhorny you can create 100 volumes at the remote site and set up volume pairing relationships in 10 seconds, for example. If you have 2 SolidFire clusters you may have done that, but if you stand-up new Kubernetes or Hyper-V clusters often, maybe you'd like to use some help.
+
+The same goes for site failover and failback. 10 seconds to failover, 10 seconds to failback (sync-back time is change- and network-dependent, but if not much has changed at the remote site, you may be able to sync back in 5 minutes).
+
 ## What you **need to know**
 
-**The recommended action is `--list`**, while the rest may or may not work for you. While basic care has been taken to avoid creating problems, I am the only person who wrote and tested this script so far so I wouldn't run configuration-modifying actions against production clusters without prior testing. I myself only need the `list` action - okay, I need `mismatch` and `report` as well - while the others were added as convenience but may not be rock-solid.
+**The recommended action is `--list`**, while the rest may or may not work for you. While basic care has been taken to avoid creating problems, I am the only person who wrote and tested this script so far, so I wouldn't run configuration-modifying actions against production clusters without prior testing. I myself only need the `list` action - okay, I need `mismatch` and `report` as well - while the others were added as convenience but may not be rock-solid.
 
-Longhorny is is **limited to supporting a simple 1-to-1, exclusively paired clusters**. One SRC cluster, one DST cluster, one pairing. It is expected to reject actions when it spots either the source or the destination has another relationship, so in order to work with multiple clusters you'd have to modify the code.
+Longhorny is is **limited to supporting a simple 1-to-1, exclusively paired clusters**. One SRC cluster, one DST cluster, one pairing. It is expected to reject actions when it spots either the source or the destination has another cluster relationship, so in order to work with multiple clusters you'd have to modify the code.
+
+Longhorny presently **requires that API access to both sites be available**. If one site is down or unreachable, you may use [PowerShell commands](#powershell-to-help) to quickly force changes of the surviving site. Of course, you may also modify the source code to not attempt connecting to the remote SolidFire cluster and use Python functions in the code on only one side.
 
 ## Production use
 
@@ -49,7 +72,9 @@ Longhorny's objective is to provide visibility into replicated SolidFire cluster
 
 Everything beyond that is extra (and maybe nice to have, assuming it works), but that's also what makes it deserve a repository of its own as it has other uses. So far I've already done more than I expected and I decided to publish the script to see if anyone has uses for other actions and/or wants to contribute.
 
-I am not committed to expanding or improving Longhorny but I may do it if I come up with new ideas for it. For example, recently I wrote a script for mapping Kubernetes/Trident volumes to SolidFire volume IDs (available in [Awesome SolidFire](https://github.com/scaleoutsean/awesome-solidfire)), so the output of that script (i.e. a list of a Kubernetes cluster's volume IDs) could be used as the input to Longhorny. Are you thinking what I'm thinking? You get the idea.
+I am not committed to expanding or improving Longhorny but I may do it if I come up with new ideas for it. For example, recently I wrote a script for mapping Kubernetes/Trident volumes to SolidFire volume IDs (available in [Awesome SolidFire](https://github.com/scaleoutsean/awesome-solidfire)), so the output of that script (i.e. a list of a Kubernetes cluster's volume IDs) could be used as the input to Longhorny. Are you thinking what I'm thinking? 
+
+That, by the way, is the main reason why Longhorny doesn't output pretty tables. It's not an end in itself. Even now, most of Longhorny's output is Python lists or dictionaries that can be assigned to variables in Python shell for additional follow-up processing, but its code can be easily reused and incorporated in other scripts.
 
 ## Requirements
 
@@ -62,65 +87,94 @@ I am not committed to expanding or improving Longhorny but I may do it if I come
 First we need to select one of the scopes (cluster, volume, site) and then one of the actions available in the scope (further below). Among the positional arguments below, `src` and `dst` are usually required for most actions.
 
 ```sh
-usage: longhorny.py [-h] [--dry DRY] [--tlsv TLSV] [--src SRC] [--dst DST] [--data DATA] {cluster,volume,site} ...
+~$ longhorny -h
+usage: longhorny.py [-h] [--dry DRY] [--tlsv TLSV] [--src SRC] [--dst DST] {cluster,volume,site} ...
 
 positional arguments:
   {cluster,volume,site}
 
 options:
   -h, --help            show this help message and exit
-  --dry DRY             Dry run mode. It is NOT available for all actions, so don not make the assumption that with --dry any action will be zero impact. Enable with --dry on. Default: off
-  --tlsv TLSV           Accept only verifiable TLS certificate when working with SolidFire cluster(s) with --tlsv 1. Default: 0
-  --src SRC             Source cluster: MVIP, username, password as a dictionary in Bash string representation: --src "{ 'mvip': '10.1.1.1', 'username':'admin', 'password':'*'}"
-  --dst DST             Destination cluster: MVIP, username, password as a dictionary in Bash string representation: --src "{ 'mvip': '10.2.2.2', 'username':'admin', 'password':'*'}"
-  --data DATA           One or more semicolon-delimited volume ID pairs for cluster and volume actions between SRC and DST clusters. Optional in --list actions. Ex: "--data '158,260;159;261'
+  --dry DRY             Dry run mode. It is NOT available for all actions, so don not make the assumption that with --dry any action will be zero impact.
+                        Enable with --dry on. Default: off.
+  --tlsv TLSV           Accept only verifiable TLS certificate when working with SolidFire cluster(s) with --tlsv 1. Default: 0.
+  --src SRC             Source cluster: MVIP, username, password as a dictionary in Bash string representation: --src "{ 'mvip': '10.1.1.1',
+                        'username':'admin', 'password':'*'}".
+  --dst DST             Destination cluster: MVIP, username, password as a dictionary in Bash string representation: --src "{ 'mvip': '10.2.2.2',
+                        'username':'admin', 'password':'*'}".
 ```
 
-Note that `--dry` **is ignored** by many operations/actions. For example, every `--list` action ignores it. For more on `--dry` see the examples in which you're interested. If I remember correctly there are three of the more dangerous actions that consider `--dry on`, but additional actions may be made aware of it. Don't assume it's been implemented for everything that may be dangerous is all I'm saying. You may check the code and add it by yourself. 
+Note that `--dry` **is ignored** by many operations/actions. For example, every `--list` action ignores it. For more on `--dry` see the examples in which you're interested. If I remember correctly initially there are three of the more dangerous actions that consider `--dry on`, but additional actions may be made aware of it. Don't assume it's been implemented for everything that may be dangerous is all I'm saying. You may check the code and add it by yourself. 
 
 There are `cluster`-, `volume`-, and `site`-level actions. For most of them you **must** provide a source (`--src`) and a destination (`--dst`). In some cases it is important that `--src` is really the source (i.e. the cluster where replication "originates" and where the volumes are read-write), so I encourage you to always verify that assignment.
 
 If your "SolidFires" have snake-oil TLS certificates, just omit `tlsv` (TLS verification) to leave it as-is (to accept snake-oil TLS certificates). Obviously, that's not what you should do, but I know most will. If you want to upload a valid TLS certificate to SolidFire clusters, see [this](https://scaleoutsean.github.io/2020/11/24/scary-bs-postman-ssl-certs.html) or RTFM. It takes 5 minutes to do it and then you can use `--tlsv 1` and avoid MITM attacks.
 
-Some actions require `DATA` to work with. When that's the case, use `--data DATA` to provide it. Data format for `DATA` varies, but Longhorny is mostly about volume-related actions so remember that volume pairs are provided as comma-delimited pairs (SRC, DST) and multiple pairs are delimited by semicolon. `"1,50;2,51"` is two SRC/DST pairs, (1,50) and (2,51), between SRC and DST (notice that if you were to swap SRC and DST with `--src` and `--dst`, then `"50,1;51,2"` would be equivalent to that in terms of the equivalence of outcome of a volume pairing action).
+### Optional data 
+
+Some volume and site actions require or may accept `--data DATA`. Example:
+
+```sh
+longhorny --src SRC --dst volume --list --data "135,230"
+```
+
+Without `--data`, all paired volumes get listed. If you have dozens and want to check just one pair, then that's the way
+
+Data format for `DATA` varies depending on action, but scope help (`volume -h`, `site -h`) has examples whenever `--data` argument is available or required. See more in [Command examples](#command-examples).
 
 ### Cluster-scope actions
 
 ```sh
-usage: longhorny.py cluster [-h] (--list | --pair | --unpair)
+~$ longhorny cluster -h
+usage: longhorny.py cluster [-h] [--data DATA] (--list | --pair | --unpair)
 
 options:
-  -h, --help  show this help message and exit
-  --list      List cluster pairing between SRC and DST clusters. Requires paired SRC and DST clusters. Does not require --data argument because cluster params are given in --src, --dst.
-  --pair      Pair SRC and DST clusters for replication. Requires SRC and DST without existing pairing relationships - multi-relationships are not supported.
-  --unpair    Unpair SRC and DST clusters. Requires SRC and DST in exclusive, mutual pairing relationship and no volume pairings.
+  -h, --help   show this help message and exit
+  --data DATA  Optional data input for selected cluster actions (where indicated in site action help). Not all cluster actions require or accept it.
+  --list       List cluster pairing between SRC and DST clusters. Requires paired SRC and DST clusters. Ignores --data because each cluster params are
+               always available from --src, --dst.
+  --pair       Pair SRC and DST for replication. Requires SRC and DST without existing pairing relationships. Multi-relationships are not supported.
+               Ignores --data.
+  --unpair     Unpair SRC and DST clusters. Requires SRC and DST in exclusive, mutual pairing relationship and no volume pairings. Ignores --data.
 ```
 
 `list` lists paired clusters. Harmless. 
 
 `pair` changes cluster configuration on both sides: SRC gets paired with DST. No data is destroyed, but if this action succeeds SRC and DST (clusters) will be in a paired relationship.
 
-`unpair` does the opposite from pair. It also changes cluster configuration on both sides, so be very careful if you have replication relationships set up. You shouldn't be able to `unpair` if there are valid replication pairs for volumes, but be careful with this action in any case.
+`unpair` does the opposite from `pair`. It also changes cluster configuration on both sides (by removing the sole cluster pairing relationship), so be very careful if you have replication relationships set up - you shouldn't be able to `unpair` if there is at least one valid volumes replication pair, but be careful nevertheless.
 
 ### Volume-scope actions
 
 ```sh
-usage: longhorny.py volume [-h] (--list | --pair | --unpair | --prime-dst | --mismatched | --reverse | --snapshot | --set-mode | --set-status | --report)
+~$ longhorny volume -h
+usage: longhorny.py volume [-h] [--data DATA]
+                           (--list | --pair | --unpair | --prime-dst | --mismatched | --reverse | --snapshot | --set-mode | --set-status | --report)
 
 options:
   -h, --help    show this help message and exit
-  --list        List volumes correctly paired for replication between SRC and DST cluster. Requires paired SRC and DST clusters. Optional --data argument lists specific volume pair(s).
-  --pair        Pair volumes for Async replication between SRC and DST clusters. Takes a semicolon-delimited list of volume IDs from SRC and DST in --data. Requires paired SRC and DST clusters.
-  --unpair      Unpair volumes paired for replication between SRC and DST clusters. Requires paired SRC and DST clusters and at least one volume pairing relationship.
-  --prime-dst   Prepare DST cluster for replication by creating volumes from SRC. Takes one 2-element list of account IDs (SRC,DST) and another of volume IDs on SRC. Creates volumes with identical properties
-                (name, size, etc.) on DST. Ex: --data "1,2;444,555"
-  --mismatched  Check for and report any volumes in asymmetric pair relationships (one-sided and volume size mismatch). Requires paired SRC and DST clusters.
-  --reverse     Reverse direction of volume replication. You MUST stop workloads using current SRC as readWrite will be flipped to replicationTarget.
-  --snapshot    Take a crash-consistent snapshot of all volumes paired for replication at SRC and with expiration t+168 hours.
-  --set-mode    Change replication mode on all SRC volumes in active replication relationship to DST. Options: Sync, Async, SnapshotsOnly (ex: --data "SnapshotsOnly"). Requires existing cluster and volume pairing
-                relationships between SRC and DST. WARNING: SnapshotsOnly replicates nothing if no snapshots enabled for remote replication are taken at SRC (create_snapshot(enable_remote_replication=True)).
-  --set-status  Set all SRC (WARNING: SRC, not DST!) relationships to resume or pause state in --data. Ex: --data "pause" sets all SRC volume relationships to pause.
-  --report      Report volume pairing relationships between SRC and DST, including mismatched and bidirectional. Requires paired SRC and DST clusters. Optional --data arguments: all, SRC, DST (default: all).
+  --data DATA   Optional data input for selected volume actions (where indicated in volume action help). Not all volume actions require or accept it.
+  --list        List volumes correctly paired for replication between SRC and DST cluster. Requires paired SRC and DST clusters. Optional --data argument
+                lists specific volume pair(s).
+  --pair        Pair volumes for Async replication between SRC and DST clusters. Takes a semicolon-delimited list of volume IDs from SRC and DST in --data
+                (e.g. --data "111,555;112,600"). Requires paired SRC and DST clusters.
+  --unpair      Unpair volumes paired for replication between SRC and DST clusters. Requires paired SRC and DST clusters and at least one volume pairing
+                relationship. Takes --data argument with only one pair at a time. Ex: --data "111,555".
+  --prime-dst   Prepare DST cluster for replication by creating volumes from SRC. Creates volumes with identical properties (name, size, etc.) on DST. .
+                Takes one 2-element list of account IDs (SRC account ID,DST account ID) and another of volume IDs on SRC. Ex: --data "1,22;444,555".
+  --mismatched  Check for and report any volumes in asymmetric pair relationships (one-sided and volume size mismatch). Requires paired SRC and DST
+                clusters. Ignores --data.
+  --reverse     Reverse direction of volume replication. You should stop workloads using current SRC (readWrite) volumes before using this action as SRC
+                side will be flipped to replicationTarget and SRC iSCSI clients disconnected. Ignores --data.
+  --snapshot    Take crash-consistent snapshot of all volumes paired for replication at SRC. Use --data to specify non-default retention (1-720) in hours
+                and snapshot name (<16b string). Ex: --data "24;apple". Default: "168;long168h-snap".
+  --set-mode    Change replication mode on specific SRC volumes ID(s) in active replication relationship to DST. Mode: Sync, Async, SnapshotsOnly. Example:
+                --data "SnapshotsOnly;101,102,103"). Requires existing cluster and volume pairing relationships between SRC and DST. WARNING: SnapshotsOnly
+                replicates nothing if no snapshots are enabled for remote replication (create_snapshot(enable_remote_replication=True)).
+  --set-status  Set all SRC relationships to resume or pause state in --data. Ex: --data "pause" sets all SRC volume relationships to manual pause. --data
+                "resume" resumes paused replication at SRC. (WARNING: applies to SRC, not DST).
+  --report      TODO: Report volume pairing relationships between SRC and DST, including mismatched and bidirectional. Requires paired SRC and DST
+                clusters. Optional --data arguments: all, SRC, DST (default: all).
 ```
 
 Yeah, I know, I got carried away.
@@ -138,45 +192,53 @@ Ok, so `list` does the same thing as it for clusters - it also lists, only volum
 
 Therefore, `--src SRC --dst DST --data "10,20;101,102,103,104" volume --prime-dst` would take volumes 101-104 belonging to the account ID 10 at the SRC site and create very similar (apart from volume IDs, for example) volumes for the account ID 20 at the DST site. Then we could prepare those new volumes for pairing so that the source site's volume IDs 101-104 can be paired with (say) the destination site's volume IDs 40-43 using `--data "101,40;102,41;103,42;104,43 volume --pair`. Diff-priming the destination would be useful when a bunch of volumes are added to the source side, but I don't know if anyone has that problem so I haven't attempted to solve it.
 
-Note that `prime-dst` doesn't change the new volumes at the destination to `replicationTarget`. Why's that? Because I don't know if you want to do that (you may want to do something else before you do that, such as import them to Hyper-V and log out of those targets before you flip them to replicationTarget), and because it's a more conservative approach. `prime-dst` can be risky if you provide a list of 5000 volumes and the destination runs out of 
+Note that `prime-dst` changes the new volumes at the destination to `replicationTarget`, based on the logic that most users would want to immediately pair them. If you need to flip them to readWrite mode (and later back, for pairing), see the PowerShell commands below.
 
 `mismatched` aims to find mismatched volumes on both the source and destination cluster. Maybe one site's volume is bigger, SRC/101 is paired to DST/40, but DST/40 isn't paired to SRC/101, etc. The idea is if you have a bunch of volumes and things seem out of control, maybe `mismatched` can save you troubleshooting time.
 
+Can Longhorny help you recover from a mismatch? It could, but I don't like the idea of "helping" you change the state of a bunch of mismatched volumes at once. See the example of a two-side mismatch further below, and imagine you have dozens. Before fixing that, one should ask how did they even get in that situation and what else might be wrong. To recover from a mismatch, the remaining one-sided relationship must be deleted, and only then a new one created, so as you can imagine it's a sensitive operation when guessing is involved.
+
+A simple way to recover is delete the one-sided relationships reported by `--mismatched` (they can't be "restored" anyway) and use the volume IDs to create new ones from the side specified in `--src`. (See the example in examples section.)
+
 `reverse` changes the direction of replication, so obviously this one is **dangerous**. If SRC is replicationTarget and DST is readWrite (that is, replication flows DST=>SRC), `reverse` flips that so that replication starts flowing SRC=>DST. This **may cause** unplanned downtime if you're not careful because flipping a volume from readWrite to replicationTarget disconnects all iSCSI clients, so if you issue this against the wrong `--src` and `--dst`, you may start getting calls, alerts and emails soon after that.
 
-I think `volume --reverse`, as currently implemented, will really work only for rehearsals, when you have to run it once to try DST cluster, and then reverse again to return to SRC as "production". Why is there no ability to failover selected volumes?
+I think `volume --reverse`, as currently implemented, will really work only for DR/BC rehearsals when you have to run it once to try DST cluster and then reverse again to return to SRC as "production". Why is there no ability to failover selected volumes?
 
 - If you need to failover a handful of volumes no matter where the rest of them run, that's just 5 lines of PowerShell
 - It's easy to take a list of IDs and failover just those volumes, but the next problem becomes when you want to flip the rest of them (or flip those back)? Who's going to figure out what should be replicated where? I think this can get messy quickly and at least with my level of skills (i.e. not high) I don't think I'd want to take on that task
 - A simpler, safer and less ambitious idea is to use a smaller, dedicated script for dealing with groups of volumes. If you have 12 Kubernetes clusters and each Kubernetes admin runs their own script with their SolidFire storage account ID in `--data "${ACCOUNT_ID}"`, it's fine to offload all pairing and flipping to them. But if you do that then the SolidFire storage admin should in my opinion go into "100% read-only" mode and just use `list` and `report` send output to something like SolidFire Collector and observe in Grafana what the Kubernetes guys are up to
 
-TODO: `snapshot` does what you think it does - it takes a snapshot to minimize potential damage before one makes a stupid move. Note that Longhorny never deletes volumes, so snapshots are safe from it. But if you mix in other code that deletes volumes or worse, snapshots may still be destroyed together with volumes by that other code (in which case we could take a site-replicating snapshot (we don't do that, as it may involve a surge of data replication), but then we may need to wait, etc. so ... no). Anyway, `DATA` settings are optional for `snapshot` action and by default it's taken with 168 hours (1 week) expiration time. You may override that with something like `--data "72;mysnap"` (expiration: `72` hours; snapshot name `mysnap`).
+`snapshot` does what you think it does - it takes a snapshot to minimize potential damage before one makes a stupid or desperate move. Note that Longhorny never deletes volumes, so snapshots are safe from whatever you do in Longhorny. But if you mix in other code that deletes volumes or worse, snapshots may still be destroyed together with volumes by that other code (in which case we could take a site-replicating snapshot (Longhorny doesn't do that, as it could cause a surge of data replication activity, then we may need to wait until that's done (assuming DST is available at all), etc. so ... no). 
+
+Anyway, `DATA` setting is optional for `snapshot` action and by default snapshot of all local volumes is taken so that it expires in 168h (1 week). You may override that with something like `--data "72;mysnap"` (expiration: `72` hours; snapshot name `mysnap`). And they're taken individually, so if you need to take some snapshots of Consistency Groups, do it separately if you can't stop those applications prior to running Longhorny's `snapshot` action. I've been thinking about adding additional options but --data "..." isn't very good and would need a rewrite to make those options action-specific which would take more work, so not for time being.
 
 `set-mode` helps you change the default (Async) to other (Sync, or SnapshotOnly) mode. SolidFire's volume-pairing API method has Async hard-coded in it, so once remote pairing has been done you may use `set-mode` to change to another and back. RTFM and the TR linked at the top for additional details.
 
 `set-status` pauses or resumes replication. If replication is going from DST=>SRC (i.e. DST side is read-write) and you need to pause replication at source if replication you would run `--src DST --dst SRC --data "pause" volume --set-status` (because DST is the source). That would put all volumes in manually paused state. Similarly, `--data "resume"` would resume. If you wanted to pause the destination (in this case, SRC)  you'd try `--src SRC --data "pause" volume --set-status`.
 
-TODO: `report` is like `list`, completely read-only, except that it its result is slightly different. "Slightly???" Why do we need yet another action for that? List *actually* lists volume pairing relationships, whereas `report` reports on volume pairings, and if I wanted to see what's misconfigured or broken, `report` may give me that whereas `list` may not. Given that both INs and OUTs are very different, I don't want to bloat `list` to 500 lines of code.
+TODO: `report` is like `list`, a completely read-only action, except that it its result is slightly different. "Slightly???" Why do we need yet another action for that? List *actually* lists volume pairing relationships, whereas `report` reports on volume pairings, and if I wanted to see what's misconfigured or broken, `report` may give me that whereas `list` may not. Given that both INs and OUTs are very different, I don't want to bloat `list` to 500 lines of code. I'm still thinking what I'd like to see and how it should be shown.
 
 ### Site-scope actions
 
 **CAUTION:** these may be **dangerous**. I'm not sure there's a strong case for them, so they are work-in-progress and may not care about `--dry on`. I would advise against using them without prior testing of the exact scenarios you aim to deal with or visual code inspection.
 
 ```sh
-usage: longhorny.py site [-h] (--detach-site | --set-access)
+~$ longhorny site -h
+usage: longhorny.py site [-h] [--data DATA] (--detach-site | --set-access)
 
 options:
   -h, --help     show this help message and exit
-  --detach-site  Remove replication relationships on SRC cluster for the purpose of taking over when DST is unreachable. Requires paired SRC and DST clusters. WARNING: there is no way to re-attach. Disconnected
-                 clusters and volumes need repairing from scratch.
-  --set-access   Change access property on all SRC volumes with replication relationship to DST. Options: readWrite, replicationTarget (ex: --data "readWrite"). Requires existing cluster and volume pairing
-                 relationships between SRC and DST. WARNING: may stop/interrupt DST->SRC or SRC->DST replication.
-
+  --data DATA    Optional data input for selected site actions (where indicated in site action help). Not all site actions require or accept it.
+  --detach-site  Remove replication relationships on SRC cluster for the purpose of taking over when DST is unreachable. Requires paired SRC and DST
+                 clusters. WARNING: there is no way to re-attach. Disconnected cluster- and volume-relationships need to be removed and re-created.
+  --set-access   Change access property on all SRC volumes with replication relationship to DST. Options: readWrite, replicationTarget (ex: --data
+                 "readWrite"). Requires existing cluster and volume pairing relationships between SRC and DST. WARNING: may stop/interrupt DST->SRC or
+                 SRC->DST replication.
 ```
 
 TODO: `detach-site` attempts to remove replication configuration from --src (`--src SRC`). 
 
-`set-access` changes access mode on volumes paired for replication **at the source**. To change access mode for the other site, use `--src OTHER`.
+`set-access` changes access mode on volumes paired for replication **at the source**. To change access mode for the other site, use `--src OTHER`. 
 
 When I started working on site actions I thought they may be useful, but later I realized it can be a slippery slope. For example, the remote site DST may or may not be offline. If it's offline (or for whatever reason unreachable), site actions will not be able to work as they attempt to connect to `--dst` as well which means actions may not be useful for their main use case.
 
@@ -188,9 +250,18 @@ If you're not sure how something works, I may post all examples and details in a
 
 But more importantly, I wouldn't suggest to anyone to use Longhorny on real clusters without having own VM-based sandbox where experimentation may be done freely.
 
+### Some --data examples
+
+
+```sh
+~$ volume --src SRC --dst DST --list --data "111,222"           # list only SRC/DST pair 111,222
+~$ volume --src SRC --dst DST --prime-dst --data "1,10,333,444" # prime account 10 on DST with SRC account ID 1's volume IDs 333 and 444
+~$ volume --src SRC --dst DST --snapshot --data "1;test"        # take a snapshot all SRC volumes, retain for 1 hours, and name each "test"
+```
+
 ### Cluster
 
-Checks if SRC and DST are paired and if so, outputs pairing configuration.
+Checks if SRC and DST are paired and if so, outputs their pairing configuration.
 
 **Pair clusters** without offering the passwords, so that you get prompted to enter them:
 
@@ -284,7 +355,7 @@ Longhorny's `cluster --unpair` won't unpair SRC and/or DST cluster if:
   'volumePairUUID': '3406d44a-081c-4841-8838-46f14feaac5e'}]
 ```
 
-Both volume relationships are Async, the pairs are `[(158,260),(164,391)]`. If we wanted to `pair` these we'd do `--data "158,260; 164,391"`.
+Both volume relationships are Async, the pairs are `[(158,260),(164,391)]`. If we wanted to `pair` these we'd do `--data "158,260;164,391"`.
 
 **Pair volumes** for replication. To replicate volume IDs 1 and 2 from site SRC to site DST, you need DST volumes to exist prior to running this action and they must have some identical properties and one different property:
 
@@ -295,22 +366,64 @@ Both volume relationships are Async, the pairs are `[(158,260),(164,391)]`. If w
 You may also want the same QoS settings or QoS Policy contents, but that's optional.
 
 ```sh
-longhorny --src SRC --dst DST --data "1,44;2,55" volume --pair
+longhorny --src SRC --dst DST volume --pair --data "1,44;2,45" 
 ```
 
-Another reminder about the direction of replication: volume IDs 1 and 2 exist at SRC so assumed that `--src` is readWrite. To replicate in the opposite direction, use `--src REMOTE` and provide the remote volume IDs as the first element of each `DATA` pair.
+Output of `volume --pair` is the same as `volume --list` - it returns all paired volumes if it succeeds. If it fails, it tells you what went wrong.
+
+Another reminder about the direction of replication: volume IDs 1 and 2 exist at SRC so assumed that `--src` is readWrite. The direction is decided by access mode (goes from readWrite to replicationTarget volume), but Longhorny considers IDs in the order of SRC, DST. That is, if both sites have volumes 1, 2, 44, and 45, then the direction would flow from the site specified with `--src`.
 
 No account ID, QoS settings or other non-essential details are asked for because in this action the destination volumes must already exist and this Longhorny `volume` level operation does not touch storage account assignment or modify any volume settings except the replication-related settings (pair, unpair, reverse, etc.). Only `--prime-dst` can create new volumes, but even that action does not delete volumes.
 
 If there's no cluster peering between SRC and DST cluster, volume pairing operation will fail immediately. SolidFire requires cluster peering to be in place before volume pairs can be configured.
 
-**Reverse replication direction** with `--reverse` action.
+**Unpair** with dry run ON:
 
-**Important assumption**: in this scenario I assume the entire cluster of something (Hyper-V, etc) needs to be switched to the site of destination, and **all paired volumes need to be reversed** and activated there. There's no attempt to take a list of volume IDs, some account ID or whatever and failover just two volumes for one database or an individual account's volumes (see [PowerShell](#powershell-to-help) examples for these "small scope" actions). Don't use this action if you want to failover just some of the paired volumes.
+```sh
+~$ longhorny.py --dry on volume --unpair --data "163,390" 
 
-If you change access status to replicationTarget all existing iSCSI connections to the volume are instantly terminated. You should stop workloads on the site that needs to change to replicationTarget mode or they'll be disconnected anyway (which is disruptive to clients using the volume(s)). Also expect some routine OS-level errors on the host side if they remain logged into targets switching to replicationTarget access mode, but those can likely be ignored as long as volumes going to replicationTarget mode have been dismounted (although they may still be logged on by the host).
+VOLUMES REPORT FOR SPECIFIED VOLUME PAIR(S): [(163, 390)]
 
-I assume that in normal life if replication is flowing from `--src SRC` to `--dst DST`, no one will try reverse the direction *unless* they can't access SRC. So as far as the risk of reversing in the wrong direction is concerned, it's rather small: SRC goes down, you won't be able to "reverse" anyway because Longhorny won't be able to connect. You'll have to manually select all volumes set to replicate from SRC to DST, pause that replication, and switch the DST side to readWrite. 
+[{'clusterPairID': 55,
+  'localVolumeID': 163,
+  'localVolumeName': 'srcvol',
+  'remoteVolumeName': 'dstvol',
+  'remoteReplicationMode': 'SnapshotsOnly',
+  'remoteReplicationPauseLimit': 3145728000,
+  'remoteReplicationStateSnapshots': 'PausedDisconnected',
+  'remoteReplicationState': 'PausedDisconnected',
+  'remoteVolumeID': 390,
+  'volumePairUUID': '9e626d68-1037-459c-b097-360433f6e65b'}]
+
+===> Dry run: replication relationship for volume IDs that would be removed (SRC, DST): [(163, 390)]
+```
+
+**Unpair without dry run** (default) is almost identical. One volume pair *at most* can be unpaired at a time, in order to prevent disasters due to typos.
+
+```raw
+VOLUMES REPORT FOR SPECIFIED VOLUME PAIR(S): [(163, 390)]
+
+[{'clusterPairID': 55,
+  'localVolumeID': 163,
+  'localVolumeName': 'srcvol',
+  'remoteVolumeName': 'dstvol',
+  'remoteReplicationMode': 'SnapshotsOnly',
+  'remoteReplicationPauseLimit': 3145728000,
+  'remoteReplicationStateSnapshots': 'PausedDisconnected',
+  'remoteReplicationState': 'PausedDisconnected',
+  'remoteVolumeID': 390,
+  'volumePairUUID': '9e626d68-1037-459c-b097-360433f6e65b'}]
+WARNING:root:Dry run in unpair action is OFF. Value: off
+WARNING:root:Volume IDs unpaired at SRC/DST: {'local': 163, 'remote': 390}
+```
+
+**Reverse replication direction** with `--reverse` action. There's a 15 second count-down before direction change.
+
+**Important assumption**: in this scenario I assume the entire cluster of something (Hyper-V, etc) needs to be made active at the destination and **all paired volumes need to be reversed in terms of replication direction** to be made available for read-write access. There's no attempt to take a list of volume IDs, some account ID or whatever and failover just two volumes for one database or an individual account's volumes (see [PowerShell](#powershell-to-help) examples for these "small scope" actions). Don't use this action if you want to failover just some of the paired volumes.
+
+If you change access status to replicationTarget all existing iSCSI connections to the volume are instantly terminated. You should stop workloads on the site that needs to change to replicationTarget mode or they'll be disconnected anyway (which is disruptive to clients using the volume(s) and may lead to unplanned downtime or even data loss). Also expect some routine OS-level errors on the host side if they remain logged into targets switching to replicationTarget access mode, but those can likely be ignored as long as volumes going to replicationTarget mode have been dismounted (although they may still be logged on by the host).
+
+I assume that in normal life if replication is flowing from `--src SRC` to `--dst DST`, no one will try reverse the direction *unless* they can't access the source site. So as far as the risk of reversing in the wrong direction is concerned, it's rather small: if the source site goes down, you won't be able to "reverse" anyway because Longhorny won't be able to connect to that site to coordinate. You'll have to do this manually, by selecting all volumes set to replicate from SRC to DST on the destination cluster, pause that replication, and switch the DST side to readWrite. In other words, unilaterally change the surviving site to read-write mode.
 
 **Prime destination volumes** when you're setting up a DR site and have many volumes to create at the destination at once.
 
@@ -327,13 +440,37 @@ Priming requires two mandatory and one optional input:
 - (required) pair of accounts IDs; one from the source (to whom the volumes belong) and one from the destination, to whom the new volumes should be assigned
 - (required) list of volume IDs from the source - their properties will be used to create volumes at the remote site
 
-Find **mismatched** volumes with `volume --mismatched`. I may still modify the format of this response, but basically it gives a view from the source vs. a view from the destination and - if the views aren't symmetric - a warning that makes it easier to figure it out may be logged at the end.
+```sh
+~$ longhorny --src SRC --dst DST volume --prime-dst --data "1,5;640,641,642"
+```
+
+The above uses volumes 640-642 from the source site's Account ID 1 as templates for three new volumes at the remote site. The destination account ID is 5.
+
+Find **mismatched** volumes with `volume --mismatched`. It gives a view from the source vs. a view from the destination and - if the views aren't symmetric - a warning that makes it easier to figure it out may be logged at the end.
 
 ```raw
-[(158, 260), (163, 390), (164, 391)] 
-[(260, 158), (262, 162), (390, 163), (391, 164)]
-WARNING:root:Mismatch found at DST: vol ID 262 in relationship a8051542-9a13-4d73-bb7f-7110483b70f4 found at DST, but paired volume ID at SRC not found: 162
+WARNING:root:Volume ID 169 is paired on SRC but not on DST cluster.
+WARNING:root:Volume ID 391 is paired on DST but not on SRC cluster.
+WARNING:root:Mismatch found at SRC: vol ID 169 in relationship 6164784e-3b80-41b2-9673-5d9f006cc49a found at SRC, but relationship from paired SRC volume ID is missing: 407.
+WARNING:root:Mismatch found at DST: vol ID 391 in relationship f4b57253-d8b6-4c89-b4c2-f73f65784b69 found at SRC, but relationship from paired SRC volume ID is missing: 164.
+
+MISMATCHED PAIRED VOLUMES ONLY:
+
+[{'PROD': {'volumeID': 169,
+           'volumePairUUID': '6164784e-3b80-41b2-9673-5d9f006cc49a',
+           'mismatchSite': 'DR',
+           'remoteVolumeID': 407}},
+ {'DR': {'volumeID': 391,
+         'volumePairUUID': 'f4b57253-d8b6-4c89-b4c2-f73f65784b69',
+         'remoteSite': 'PROD',
+         'remoteVolumeID': 164}}]
 ```
+
+`mismatched` output also contains a list of all paired volumes with volume-level (not volume pairing-level) details, which makes it convenient for copy-paste into other commands (or sending to an infrastructure monitoring system, which was the original idea - to use this in SFC). In the case above, as volume-pair relationships can't be "restored", a way to recover is:
+
+- Manually remove 407,169 at DR and 164,391 at PROD site
+- Run `--src PROD --dst DR --data "169,407;164,391 volume --pair` to rebuild the relationships
+- Potentially `--set-mode` to `SnapshotsOnly` or `Sync` if those weren't `Async` before getting damaged
 
 **Unpair volumes** is a sensitive operation. Although it "only" unpairs and doesn't delete volumes, it's suggested to use it with `--dry on` (default is `off`!) before actually letting it remove a pairing.
 
@@ -343,10 +480,18 @@ longhorny -dry on --data "167,393" volume --unpair
 
 With `--dry on`, we only get a "preview" similar to this:
 
-```sh
+```raw
 Remove data tuple: [(167, 393)]
-===> Dry run: volume IDs that would be removed (SRC, DST): [(167, 393)]
+===> Dry run: replication relationship for volume IDs that would be removed (SRC, DST): [(167, 393)]
 ```
+
+**Snapshot** currently takes a snapshot of *all* volumes at the source. In DATA, the first digit is "retention in hours" (1-720) and the second part is snapshot name. 
+
+```sh
+longhorny --src SRC --dst DST volume --snapshot --data "1;long1h"
+```
+
+The main idea is to be able to roll-back locally (these snapshots are not replicated) to something before making desperate moves. Since snapshots are taken individually, if you have applications that use multiple volumes, you should stop them before running this command.
 
 ## Miscellaneous stuff
 
@@ -406,15 +551,15 @@ VolumeID Name
      157 pvc-a5f21571-e002-493f-b2dc-df01f40c1fa1
 ```
 
-We can pipe that to `Set-SFVolume` or store that result in a variable, e.g. `$kvols`, and then pipe that to some other command:
+We can pipe that to `Set-SFVolume` or store result in a variable, e.g. `$kvols`, and then pipe that to some other command:
 
 ```powershell
 $kvols.VolumeID | Set-SFVolume -Access readWrite
 ```
 
-Again, 2 lines vs. 100 when you have to consider a variety of other possibilities. 
+Again, 2 lines vs. 100, when you don't have to consider a variety of other possibilities. 
 
-That's why there's no urgency to further develop `site`-level commands, although it'd be nice if I had some ideas about specific use cases which I'd want to address with Longhorny.
+That's why there's no urgency to further develop `site`-level commands, although it'd be nice to have them if I had some ideas about specific use cases to address with Longhorny.
 
 ### Site object (SRC, DST) and Longhorny CLI arguments
 
@@ -445,7 +590,7 @@ For me the best way to run Longhorny is:
 - Two shell terminals (one dragged to left (or to the top) and the other to the right (or to the bottom))
 - The left has `--src SRC --dst DST`, the right has `--src DST --dst SRC` (with or without password value provided in the site object string)
 
-Then you just go to the right window and as long as you don't copy over *entire* lines (with the wrong --src and --dst in them), you can be fine.
+Then you just go to the correct "site terminal" and as long as you don't copy over *entire* lines (with the wrong --src and --dst in them), you can be fine.
 
 Then Longhorny uses SolidFire Python SDK to establish a connection to each site.
 
@@ -466,7 +611,7 @@ For production use, I strongly recommend having two single-node test clusters.
 
 Here's what you need for testing and development:
 
-- Two mid-sized VMs for SolidFire "sites" - 2 x 16 GB RAM (NOTE: SolidFire Demo VM is an OVA file, and if you don't have VMware you can use the free ESXi 7, deploy it to KVM or Hyper-V, and deploy OVA to ESXi VM - needs 16 GB per VM)
+- Two mid-sized VMs for SolidFire "sites" - 2 x 16 GB RAM (NOTE: SolidFire Demo VM is an OVA file, and if you don't have VMware you can use the free ESXi 7, deploy it to KVM or Hyper-V, and deploy OVA to ESXi VM - which requires 16 GB per VM plus say 4 GB for ESXi)
 - Two mid-sized VMs for compute "site" resource, e.g. Hyper-V, KVM, Kubernetes, etc. - 2 x 16 GB RAM
 
 You can get the free SolidFire Demo VM from NetApp Support (login required). It's limited to 100 volumes - more than enough for testing. SolidFire Demo VM allows multiple storage accounts (each being a different iSCSI client), so just two SolidFire VMs can accommodate testing with several VMs simulating different Kubernetes or other clusters at each "site" (VM group). SolidFire Demo VM is well-behaved and an excellent tool for test/development as long as you don't need high performance (it's limited to 3000 IOPS).
@@ -478,7 +623,7 @@ As of now it's a mess because SolidFire SDK 12.3.1 was released, but there are s
 - [Update version-related info and publish on PyPi](https://github.com/solidfire/solidfire-sdk-python/issues/60)
 - [Usage of dash-separated 'description-file' will not be supported starting Sep 26, 2024](https://github.com/solidfire/solidfire-sdk-python/issues/65)
 
-Older versions are available on `pip`, but may have other bugs.
+Older versions are available with `pip`, but may have bugs that have been solved since.
 
 See the Github [issues](https://github.com/solidfire/solidfire-sdk-python/issues) for more.
 
