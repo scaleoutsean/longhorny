@@ -47,6 +47,11 @@ With Longhorny you can create 100 volumes at the remote site and set up volume p
 
 The same goes for site failover and failback. 10 seconds to failover, 10 seconds to failback (sync-back time is change- and network-dependent, but if not much has changed at the remote site, you may be able to sync back in 5 minutes).
 
+If you don't want to read the whole page:
+
+- There's a minimalistic tutorial in [tutorial.md](./tutorial.md)
+- If you prefer videos, there's a [5m11s video](https://rumble.com/v513r8w-project-longhorny.html) with main features
+
 ## What you **need to know**
 
 **The recommended action is `--list`**, while the rest may or may not work for you. While basic care has been taken to avoid creating problems, I am the only person who wrote and tested this script so far, so I wouldn't run configuration-modifying actions against production clusters without prior testing. I myself only need the `list` action - okay, I need `mismatched` and `report` actions as well - while the others were added as convenience but may not be rock-solid.
@@ -210,7 +215,7 @@ I think `volume --reverse`, as currently implemented, will really work only for 
 - It's easy to take a list of IDs and failover just those volumes, but the next problem becomes when you want to flip the rest of them (or flip those back)? Who's going to figure out what should be replicated where? I think this can get messy quickly and at least with my level of skills (i.e. not high) I don't think I'd want to take on that task
 - A simpler, safer and less ambitious idea is to use a smaller, dedicated script for dealing with groups of volumes. If you have 12 Kubernetes clusters and each Kubernetes admin runs their own script with their SolidFire storage account ID in `--data "${ACCOUNT_ID}"`, it's fine to offload all pairing and flipping to them. But if you do that then the SolidFire storage admin should in my opinion go into "100% read-only" mode and just use `list` and `report` send output to something like SolidFire Collector and observe in Grafana what the Kubernetes guys are up to
 
-`snapshot` does what you think it does - it takes a snapshot to minimize potential damage before one makes a stupid or desperate move. Note that Longhorny never deletes volumes, so snapshots are safe from whatever you do in Longhorny. But if you mix in other code that deletes volumes or worse, snapshots may still be destroyed together with volumes by that other code (in which case we could take a site-replicating snapshot (Longhorny doesn't do that, as it could cause a surge of data replication activity, then we may need to wait until that's done (assuming DST is available at all), etc. so ... no). 
+`snapshot` does what you think it does - it takes a snapshot to minimize potential damage before one makes a stupid or desperate move. Note that Longhorny never deletes volumes, so snapshots are safe from whatever you do in Longhorny. But if you mix in other code that deletes volumes or worse, snapshots may still be destroyed together with volumes by that other code, in which case we could take a site-replicating snapshot (Longhorny doesn't do that, as it could cause a surge of data replication activity, then we may need to wait until that's done (assuming DST is available at all), etc. so ... no). 
 
 Anyway, `DATA` setting is optional for `snapshot` action and by default snapshot of all local volumes is taken so that it expires in 168h (1 week). You may override that with something like `--data "72;mysnap"` (expiration: `72` hours; snapshot name `mysnap`). And they're taken individually, so if you need to take some snapshots of Consistency Groups, do it separately if you can't stop those applications prior to running Longhorny's `snapshot` action. I've been thinking about adding additional options but --data "..." isn't very good and would need a rewrite to make those options action-specific which would take more work, so not for time being.
 
@@ -257,8 +262,8 @@ But more importantly, I wouldn't suggest to anyone to use Longhorny on real clus
 
 ```sh
 ~$ volume --src SRC --dst DST --list --data "111,222"           # list only SRC/DST pair 111,222
-~$ volume --src SRC --dst DST --prime-dst --data "1,10,333,444" # prime account 10 on DST with SRC account ID 1's volume IDs 333 and 444
-~$ volume --src SRC --dst DST --snapshot --data "1;test"        # take a snapshot all SRC volumes, retain for 1 hours, and name each "test"
+~$ volume --src SRC --dst DST --prime-dst --data "1,10;333,444" # use SRC-side Account ID 1's volumes 333 and 444 as templates for priming Account 10 on DST site
+~$ volume --src SRC --dst DST --snapshot --data "1;test"        # take a snapshot of all paired SRC volumes, retain for 1 hour, and name each "test"
 ```
 
 ### Cluster

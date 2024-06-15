@@ -65,7 +65,7 @@ If you don't need Async for this pairing, you can use the bandwidth-saving Snaps
 ./longhorny.py volume --set-mode --data "SnapshotsOnly;169"
 ```
 
-Before a failover to the remote site, stop workloads on paired volumes at the source side and take a snapshot of all paired volumes. "`1;temp` means 1 hour retention, snapshot name "temp".
+Before a failover to the remote site, stop workloads on paired volumes at the source side and take a snapshot of all paired volumes on the site specified in `--src`. "`1;temp`" means 1-hour retention and snapshot name "temp".
 
 ```sh
 ./longhorny.py volume --snapshot --data "1;temp"
@@ -73,12 +73,13 @@ Before a failover to the remote site, stop workloads on paired volumes at the so
 
 To test failover and make the remote site "active" (readWrite):
 
+**CAUTION:** this cuts off iSCSI access to all clients at the site specified in `--src`!
+
 ```sh
 ./longhorny.py volume --reverse
 ```
 
-As I've' mentioned above, you SHOULD have workloads that use the source side stopped because it will be set to replicationTarget i.e. read-only mode.
+As I've' mentioned above, you SHOULD have workloads that use the source side stopped because all paired volumes from that site will be set to replicationTarget i.e. read-only mode.
 
 To fail back, you can do the same thing - stop remote workloads or replicated volumes, take a local site snapshot at the remote site, and then reverse again.
-
 

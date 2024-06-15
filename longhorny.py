@@ -992,7 +992,7 @@ def set_volume_replication_mode(src: dict, dst: dict, replication_mode: list):
     if list(set(src_vol_mode)) != ['readWrite']:
         logging.error("SRC volume access mode is not suitable for pairing. Specified SRC site volumes are in mode: " +
                       str(src_vol_mode[0]) +
-                      ". Direction of replication must be from readWrite to replicationTarget. Changes must be made on the source where replication originates. Maybe you wanted to change mode at DST? Exiting.")
+                      ". Direction of replication must be from readWrite to replicationTarget. Changes must be made on the source where replication originates. Maybe you tried to change mode at DST? Exiting.")
         exit(200)
     if args.dry == True or args.dry == 'True' or args.dry == 'true' or args.dry == 'on' or args.dry == 'On' or args.dry == 'ON':
         logging.info(
@@ -1513,7 +1513,7 @@ parser.add_argument(
     '--dry',
     type=str,
     default='off',
-    help='Dry run mode. It is NOT available for all actions, so don not make the assumption that with --dry any action will be zero impact. Enable with --dry on. Default: off.')
+    help='Dry run mode. It is NOT available for all actions, so do not make the assumption that with --dry any action will have zero impact. Enable it with --dry on. Default: off.')
 parser.add_argument(
     '--tlsv',
     type=int,
