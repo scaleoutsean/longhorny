@@ -11,8 +11,8 @@
     - [Site-scope actions](#site-scope-actions)
   - [Command examples](#command-examples)
     - [Some --data examples](#some---data-examples)
-    - [Cluster](#cluster)
-  - [Volume](#volume)
+    - [Cluster-level](#cluster-level)
+    - [Volume-level](#volume-level)
   - [Miscellaneous stuff](#miscellaneous-stuff)
     - [PowerShell to help](#powershell-to-help)
     - [Site object (SRC, DST) and Longhorny CLI arguments](#site-object-src-dst-and-longhorny-cli-arguments)
@@ -266,14 +266,13 @@ But more importantly, I wouldn't suggest to anyone to use Longhorny on real clus
 
 ### Some --data examples
 
-
 ```sh
 ~$ volume --src SRC --dst DST --list --data "111,222"           # list only SRC/DST pair 111,222
 ~$ volume --src SRC --dst DST --prime-dst --data "1,10;333,444" # use SRC-side Account ID 1's volumes 333 and 444 as templates for priming Account 10 on DST site
 ~$ volume --src SRC --dst DST --snapshot --data "1;test"        # take a snapshot of all paired SRC volumes, retain for 1 hour, and name each "test"
 ```
 
-### Cluster
+### Cluster-level
 
 Checks if SRC and DST are paired and if so, outputs their pairing configuration.
 
@@ -342,7 +341,7 @@ Longhorny's `cluster --unpair` won't unpair SRC and/or DST cluster if:
 - there are existing volume replication pairs
   - Longhorny fails for any as we want to avoid accidental unpairing of relationships with some other cluster involved
 
-## Volume
+### Volume-level
 
 `volume --list` does what you think it does: given a SRC and a DST cluster, it checks if cluster pairing is in place and spits out a list of properly paired volumes between them. Remember, there's no "direction" in this configuration: SolidFire replication is readWrite to replicationTarget, so to know what's replicated to what, you won't find that in this output here. This lists volume pairing relationships (and that's why I'm thinking to add `volume report` action).
 
