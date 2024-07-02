@@ -83,3 +83,29 @@ As I've mentioned above, you SHOULD have all the workloads that use the source s
 
 To fail back, you can do the same thing in reverse: at the remote site first stop remote workloads on replicated volumes, take a local site snapshot (at the remote site), and then reverse to fail back to the original, primary site.
 
+### Fix broken relationship broken by Trident CSI resize action
+
+Trident CSI lets us resize PVC by simply editing it from the CLI (`kubectl edit pvc ${PVCNAME}`)
+
+Let's say volume size of SRC/172 was originally 1Gi and now is 2Gi.
+
+```yaml
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi
+```
+
+This means the destination will now be smaller and volume replication will stop due to volume size mismatch.
+
+To fix this, use the volume upsize action on the source and destination, in that order.
+
+```sh
+./longhorny.py volume --upsize --data "172,13"
+```
+
+Longhorny will look up totalSize from the properties of SRC/172, grow DST/13 to the same size, and resume replication. 
+
+Pre-existing snapshots will retain the smaller size. You may want to manually take a new baseline snapshot just in case.

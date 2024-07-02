@@ -308,6 +308,22 @@ def volume(args):
             if state == 'pause' or state == 'resume':
                 logging.info("Desired replication state: " + state)
                 set_volume_replication_state(src, dst, state)
+    elif args.resize:
+        if args.data is None:
+            logging.error(
+                "Volume resize action requires volume size and volume ID. Use --data '1073741824;100,200' to grow 100 and 200 by 1Gi. Exiting.")
+            exit(200)
+        else:
+            data = increase_volume_size_data(args.data)
+            increase_size_of_paired_volumes(src, dst, data)
+    elif args.upsize_remote:
+        if args.data is None:
+            logging.error(
+                "Remote volume resize action requires volume IDs of a SRC/DST pair. Use --data '100,200' to grow DST/200 to the size of SRC/100. Exiting.")
+            exit(200)
+        else:
+            data = upsize_remote_volume_data(args.data)
+            upsize_remote_volume(src, dst, data)
     else:
         logging.warning("Volume action not recognized.")
     return
@@ -328,12 +344,8 @@ def snapshot_site(src: dict, dst: dict, snap_data: list) -> dict:
     """
     Create local crash-consistent snapshot for all individual volumes using paired volumes on SRC.
 
-    Longhorny takes individual snapshots rather than one monster-sized group snapshot.
-    That means that should a snapshot fail (e.g. volume has 32 snapshots), it will not affect the taking of other snapshots.
-    That also means that this function runs slower than a group snapshot, and does nothing for consistency groups.
-    Do not count on being to able to restore data that resides on different volumes without group snapshots.
     """
-    logging.warning("NOTE: this function creates individual snapshots and does nothing for groups of active inter-related volumes. If you have applications that span multiple volumes, you may need to use group snapshots or dismount volumes prior to taking snapshot with this function!")
+    logging.warning("NOTE: If you have applications that span multiple volumes, you may need to create a dedicated group snapshot for those volumes because you may want to restore those as a group.")
     logging.warning(
         "Taking individual snapshots at SRC using params: " +
         str(snap_data))
@@ -359,6 +371,366 @@ def snapshot_site(src: dict, dst: dict, snap_data: list) -> dict:
                 ".")
             logging.error("Error: " + str(e))
             exit(200)
+    return
+
+
+def upsize_remote_volume(src: dict, dst: dict, data: list):
+    """
+    Increase size of DST volume to match the size of SRC volume.
+
+    The main use case for upsizing just the remote paired volume is Trident CSI generally increases only the size of the source volume, leaving the remote volume smaller.
+    This function allows the destination volume to be increased to match the source volume and replication to continue.
+    As the volumes are mismatched to begin with, the function does not check multiple volume pairing details - it simply increases the size of the paired destination volume to match the source volume.
+    """
+    logging.info("Attempting to grow paired DST volume ID " +
+                 str(data[1]) + " to size of SRC volume ID " + str(data[0]) + ".")
+    src_vol_params = {
+        'isPaired': True,
+        'volumeStatus': 'active',
+        'includeVirtualVolumes': False,
+        'volumeIDs': [
+            data[0]]}
+    dst_vol_params = {
+        'isPaired': True,
+        'volumeStatus': 'active',
+        'includeVirtualVolumes': False,
+        'volumeIDs': [
+            data[1]]}
+    src_vol = src['sfe'].invoke_sfapi(
+        method='ListVolumes',
+        parameters=src_vol_params)
+    dst_vol = dst['sfe'].invoke_sfapi(
+        method='ListVolumes',
+        parameters=dst_vol_params)
+    if src_vol['volumes'] == [] or dst_vol['volumes'] == []:
+        logging.error("Volume ID " +
+                      str(data[0]) +
+                      " and/or " +
+                      str(data[1]) +
+                      " not found on SRC or DST cluster, respectively. Exiting.")
+        exit(200)
+    else:
+        logging.info("Volumes found: SRC volume ID " +
+                     str(data[0]) + " and DST volume ID " + str(data[1]) + ".")
+    src_vol_mode = src_vol['volumes'][0]['access']
+    dst_vol_mode = dst_vol['volumes'][0]['access']
+    src_vol_total_size = src_vol['volumes'][0]['totalSize']
+    dst_vol_total_size = dst_vol['volumes'][0]['totalSize']
+    if not dst_vol_total_size < src_vol_total_size:
+        logging.error("SRC volume ID " +
+                      str(data[0]) +
+                      " must be larger than DST volume ID " +
+                      str(data[1][1]) +
+                      " for this action to work. Exiting.")
+        exit(200)
+    try:
+        pause_params = {'volumeID': data[0], 'pausedManual': True}
+        src['sfe'].invoke_sfapi(
+            method='ModifyVolumePair',
+            parameters=pause_params)
+        logging.info("Paused replication for SRC volume ID " +
+                     str(data[0]) + ".")
+    except BaseException:
+        logging.error(
+            "Error pausing replication for SRC volume ID " + str(data[0]) + ".")
+        exit(200)
+    try:
+        r = dst['sfe'].modify_volume(data[1], total_size=src_vol_total_size)
+        logging.info("Increased size of DST volume ID " +
+                     str(data[1]) + " to " + str(src_vol_total_size) + " bytes.")
+    except Exception as e:
+        logging.error(
+            "Error increasing size of DST volume ID " +
+            str(
+                data[1]) +
+            " to " +
+            str(src_vol_total_size) +
+            " bytes. Please manually resize the DST volume. You may use volume --mismatched to view. Exiting.\n" +
+            str(e))
+        exit(200)
+    resume_params = {'volumeID': data[0], 'pausedManual': False}
+    try:
+        logging.info(
+            "Will resume replication for the pair if SRC is readWrite and DST replicationTarget.")
+        if src_vol_mode == 'readWrite' and dst_vol_mode == 'replicationTarget':
+            r = src['sfe'].invoke_sfapi(
+                method='ModifyVolumePair',
+                parameters=resume_params)
+            logging.info(
+                "Resumed replication for volume pair on SRC volume ID " + str(data[0]) + ".")
+        else:
+            logging.warning("Volume ID " +
+                            str(data[0]) +
+                            " is in mode " +
+                            str(src_vol_mode) +
+                            " and paired with volume ID " +
+                            str(data[1]) +
+                            " in mode " +
+                            str(dst_vol_mode) +
+                            ". Skipping attempt to resume replication.")
+    except BaseException:
+        logging.error(
+            "Error resuming replication for volume ID " +
+            str(
+                data[0]) +
+            ". The volumes should be resized but replication is still paused. Try manually resuming. Exiting.")
+        exit(200)
+    try:
+        src_vol_final = src['sfe'].invoke_sfapi(
+            method='ListVolumes', parameters=src_vol_params)
+        dst_vol_final = dst['sfe'].invoke_sfapi(
+            method='ListVolumes', parameters=dst_vol_params)
+    except Exception as e:
+        logging.error(
+            "Error listing volumes after DST volume resizing. Exiting.\n" +
+            str(e))
+        exit(200)
+    src_vol_details = {
+        'volumeID': src_vol_final['volumes'][0]['volumeID'],
+        'name': src_vol_final['volumes'][0]['name'],
+        'totalSize': src_vol_final['volumes'][0]['totalSize'],
+        'access': src_vol_final['volumes'][0]['access'],
+        'state': src_vol_final['volumes'][0]['volumePairs'][0]['remoteReplication']['state'],
+        'volumePairs': src_vol_final['volumes'][0]['volumePairs'][0]['remoteVolumeID']
+    }
+    dst_vol_details = {
+        'volumeID': dst_vol_final['volumes'][0]['volumeID'],
+        'name': dst_vol_final['volumes'][0]['name'],
+        'totalSize': dst_vol_final['volumes'][0]['totalSize'],
+        'access': dst_vol_final['volumes'][0]['access'],
+        'volumePairs': dst_vol_final['volumes'][0]['volumePairs'][0]['remoteVolumeID']
+    }
+    if src_vol_details['totalSize'] == dst_vol_details['totalSize']:
+        logging.info("Volume ID " +
+                     str(data[0]) +
+                     " and " +
+                     str(data[1]) +
+                     " have been successfully resized to " +
+                     str(src_vol_details['totalSize']) +
+                     " bytes. (" +
+                     str(round(src_vol_details['totalSize'] /
+                               (1024 *
+                                1024 *
+                                1024), 2)) +
+                     " GiB).")
+    else:
+        logging.error("Volume ID " +
+                      str(data[0]) +
+                      " and " +
+                      str(data[1]) +
+                      " have not been resized to " +
+                      str(src_vol_details['totalSize']) +
+                      " bytes. Use volumes --mismatch to find what happened. Exiting.")
+        exit(200)
+    resize_action_report = [src_vol_details, dst_vol_details]
+    print("\nUPSIZE REMOTE VOLUME ACTION REPORT:\n")
+    pprint.pp(resize_action_report)
+    return
+
+
+def increase_size_of_paired_volumes(src: dict, dst: dict, data: list):
+    """
+    Increase size of paired volumes on SRC and DST clusters by the byte amount specified in the data field.
+
+    volume --grow --data='1073741824;100,200' means grow 100 and 200 by 1Gi.
+    This function first uses ListVolumes to confirm the source (volume ID) exists in readWrite access mode and is paired with a volume on the destination cluster.
+    """
+    logging.info("Attempting to grow paired volumes SRC volume ID " +
+                 str(data[1][0]) +
+                 " and DST volume ID " +
+                 str(data[1][1]) +
+                 " by " +
+                 str(data[0]) +
+                 " bytes.")
+    src_vol_params = {
+        'isPaired': True,
+        'volumeStatus': 'active',
+        'includeVirtualVolumes': False,
+        'volumeIDs': [
+            data[1][0]]}
+    dst_vol_params = {
+        'isPaired': True,
+        'volumeStatus': 'active',
+        'includeVirtualVolumes': False,
+        'volumeIDs': [
+            data[1][1]]}
+    src_vol = src['sfe'].invoke_sfapi(
+        method='ListVolumes',
+        parameters=src_vol_params)
+    dst_vol = dst['sfe'].invoke_sfapi(
+        method='ListVolumes',
+        parameters=dst_vol_params)
+    if src_vol['volumes'] == [] or dst_vol['volumes'] == []:
+        logging.error("Volume ID " +
+                      str(data[1][0]) +
+                      " and/or " +
+                      str(data[1][1]) +
+                      " not found on SRC or DST cluster, respectively. Exiting.")
+        exit(200)
+    else:
+        logging.info("Volumes found: SRC volume ID " +
+                     str(data[1][0]) +
+                     " and DST volume ID " +
+                     str(data[1][1]) +
+                     ".")
+    src_vol_mode = src_vol['volumes'][0]['access']
+    dst_vol_mode = dst_vol['volumes'][0]['access']
+    src_vol_total_size = src_vol['volumes'][0]['totalSize']
+    dst_vol_total_size = dst_vol['volumes'][0]['totalSize']
+    if src_vol_total_size != dst_vol_total_size:
+        logging.warning("SRC volume ID " +
+                        str(data[1][0]) +
+                        " and DST volume ID " +
+                        str(data[1][1]) +
+                        " are not the same size. Exiting.")
+        exit(200)
+    if data[0] > (src_vol_total_size * 2):
+        logging.error("SRC volume ID " +
+                      str(data[0]) +
+                      " would be increased by " +
+                      str(data[0]) +
+                      " bytes, which is more than twice its current size of " +
+                      str(src_vol_total_size) +
+                      " bytes. To avoid mistakes, this function cannot increase volume size by either more than 2x or 1 TiB at a time. Exiting.")
+        exit(200)
+    new_total_size = data[0] + src_vol_total_size
+    if new_total_size > 17592186044416:
+        logging.error("Volumes SRC/" +
+                      str(data[1][0]) +
+                      ", and DST/" +
+                      str(data[1][1]) +
+                      " would be increased to " +
+                      str(new_total_size) +
+                      " bytes, which is more than the SolidFire maximum volume size of 16 TiB. Exiting.")
+        exit(200)
+    # NOTE: we user src volume's pairing configuration and status to determine
+    # if replication is paused or not
+    dst_vol_replication_state = src_vol['volumes'][0]['volumePairs'][0]['remoteReplication']['state']
+    dst_vol_id = src_vol['volumes'][0]['volumePairs'][0]['remoteVolumeID']
+    if src_vol_mode != 'readWrite' or dst_vol_id != data[1][1] or dst_vol_mode != 'replicationTarget':
+        logging.error("Volume ID " +
+                      str(data[1][0]) +
+                      " is in mode " +
+                      str(src_vol_mode) +
+                      " and paired with volume ID " +
+                      str(dst_vol_id) +
+                      " with replication state " +
+                      str(dst_vol_replication_state) +
+                      ".")
+        exit(200)
+    else:
+        logging.info("Volume ID " +
+                     str(data[1][0]) +
+                     " is in " +
+                     str(src_vol_mode) +
+                     " mode, paired with " +
+                     str(dst_vol_id) +
+                     " in replication state " +
+                     str(dst_vol_replication_state) +
+                     ". Continuing.")
+    try:
+        pause_params = {'volumeID': data[1][0], 'pausedManual': True}
+        src['sfe'].invoke_sfapi(
+            method='ModifyVolumePair',
+            parameters=pause_params)
+        logging.info("Paused replication for SRC volume ID " +
+                     str(data[1][0]) + ".")
+    except BaseException:
+        logging.error(
+            "Error pausing replication for SRC volume ID " + str(data[1][0]) + ".")
+        exit(200)
+    try:
+        r = dst['sfe'].modify_volume(data[1][1], total_size=new_total_size)
+        logging.info("Increased size of DST volume ID " +
+                     str(data[1][0]) + " to " + str(data[0]) + " bytes.")
+    except Exception as e:
+        logging.error("Error increasing size of DST volume ID " +
+                      str(data[1][1]) +
+                      " to " +
+                      str(data[0]) +
+                      " bytes. Please manually resize the DST volume. You may use volume --mismatched to view. Exiting.\n" +
+                      str(e))
+        exit(200)
+    try:
+        logging.info("Size of the destination volume has been increased.")
+        r = src['sfe'].modify_volume(data[1][0], total_size=new_total_size)
+        logging.info("Increased size of SRC volume ID " +
+                     str(data[1][0]) + " to " + str(new_total_size) + " bytes.")
+    except Exception as e:
+        logging.error(
+            "Error increasing size of volume " +
+            str(
+                data[1][0]) +
+            " to " +
+            str(new_total_size) +
+            " bytes. Please manually resize the SRC volume and set replication to resume. You may use volume --mismatched to view. Exiting.\n" +
+            str(e))
+        exit(200)
+    resume_params = {'volumeID': data[1][0], 'pausedManual': True}
+    try:
+        logging.info("Resuming replication for volume pair.")
+        r = src['sfe'].invoke_sfapi(
+            method='ModifyVolumePair',
+            parameters=resume_params)
+        logging.info(
+            "Resumed replication for volume pair on SRC volume ID " + str(data[1][0]) + ".")
+    except BaseException:
+        logging.error(
+            "Error resuming replication for volume ID " +
+            str(
+                data[1][0]) +
+            ". The volumes should be resized but replication is still paused. Try manually resuming. Exiting.")
+        exit(200)
+    try:
+        src_vol_final = src['sfe'].invoke_sfapi(
+            method='ListVolumes', parameters=src_vol_params)
+        dst_vol_final = dst['sfe'].invoke_sfapi(
+            method='ListVolumes', parameters=dst_vol_params)
+    except Exception as e:
+        logging.error(
+            "Error listing volumes after resizing. Exiting.\n" +
+            str(e))
+        exit(200)
+    src_vol_details = {
+        'volumeID': src_vol_final['volumes'][0]['volumeID'],
+        'name': src_vol_final['volumes'][0]['name'],
+        'totalSize': src_vol_final['volumes'][0]['totalSize'],
+        'access': src_vol_final['volumes'][0]['access'],
+        'state': src_vol_final['volumes'][0]['volumePairs'][0]['remoteReplication']['state'],
+        'volumePairs': src_vol_final['volumes'][0]['volumePairs'][0]['remoteVolumeID']
+    }
+    dst_vol_details = {
+        'volumeID': dst_vol_final['volumes'][0]['volumeID'],
+        'name': dst_vol_final['volumes'][0]['name'],
+        'totalSize': dst_vol_final['volumes'][0]['totalSize'],
+        'access': dst_vol_final['volumes'][0]['access'],
+        'volumePairs': dst_vol_final['volumes'][0]['volumePairs'][0]['remoteVolumeID']
+    }
+    if src_vol_details['totalSize'] == dst_vol_details['totalSize']:
+        logging.info("Volume ID " +
+                     str(data[1][0]) +
+                     " and " +
+                     str(data[1][1]) +
+                     " have been successfully resized to " +
+                     str(src_vol_details['totalSize']) +
+                     " bytes. (" +
+                     str(round(src_vol_details['totalSize'] /
+                               (1024 *
+                                1024 *
+                                1024), 2)) +
+                     " GiB).")
+    else:
+        logging.error("Volume ID " +
+                      str(data[1][0]) +
+                      " and " +
+                      str(data[1][1]) +
+                      " have not been resized to " +
+                      str(src_vol_details['totalSize']) +
+                      " bytes. Use volumes --mismatch to find what happened. Exiting.")
+        exit(200)
+    resize_action_report = [src_vol_details, dst_vol_details]
+    print("\nRESIZE ACTION REPORT:\n")
+    pprint.pp(resize_action_report)
     return
 
 
@@ -1483,6 +1855,7 @@ def replication_state(s: str) -> str:
         return 'resume'
     else:
         logging.error("Replication mode must be one of 'pause', 'resume'.")
+        exit(4)
 
 
 def snapshot_data(s: str) -> list:
@@ -1498,6 +1871,39 @@ def snapshot_data(s: str) -> list:
         logging.error(
             "Snapshot data must be a semi-colon-separated list of integer and string (e.g. --data '168;my_snapshot'). Exiting.")
         exit(1)
+
+
+def increase_volume_size_data(s: str) -> list:
+    """
+    Parses data string like '1073741824;100,200' and returns a list of two elements: added size in bytes and a list SRC/DST volume ID pair.
+    """
+    s = s.split(';')
+    try:
+        #
+        if int(s[0]) < 1073741824 or int(s[0]) > 107374182400:
+            logging.error(
+                "This feature supports volume size growth 1-100 GiB at a time. Exiting.")
+            exit(4)
+        else:
+            s[0] = int(s[0]) - int(s[0]) % 4096
+            return [int(s[0]), [int(i) for i in s[1].split(',')]]
+    except BaseException:
+        logging.error(
+            "Volume size data must be a semi-colon-separated list of integer and comma-separated list of volume IDs (e.g. --data '1073741824;100,200'). Exiting.")
+        exit(4)
+
+
+def upsize_remote_volume_data(s: str) -> list:
+    """
+    Parses data string like '100,200' and returns a list with two integer elements (SRC and DST volume pair IDs).
+    """
+    s = s.split(',')
+    try:
+        return [int(s[0]), int(s[1])]
+    except BaseException:
+        logging.error(
+            "Volume ID data must be a comma-separated list of two integers (e.g. --data '100,200'). Exiting.")
+        exit(4)
 
 
 def report_data(s):
@@ -1592,6 +1998,16 @@ volume_action.add_argument(
     required=False,
     help='Check for and report any volumes in asymmetric pair relationships (one-sided and volume size mismatch). Requires paired SRC and DST clusters. Ignores --data.')
 volume_action.add_argument(
+    '--resize',
+    action='store_true',
+    required=False,
+    help='Increase size of paired SRC and DST volumes by up to 1TiB or 2x of the original size, whichever is smaller. readWrite side must be on SRC cluster. Requires --data. Ex: "1073741824;100,200" adds 1 GiB to volume IDs SRC/100, DST/200. Default: "".')
+volume_action.add_argument(
+    '--upsize-remote',
+    action='store_true',
+    required=False,
+    help='Increase size of paired DST volume to the same size of SRC volume, usually to allow DST to catch up with the size of SRC increased by Trident CSI. readWrite side must be on SRC side. Requires --data. Ex: --data "100,200" grows DST/200 to the size of SRC/100. Default: "0,0".')
+volume_action.add_argument(
     '--reverse',
     action='store_true',
     required=False,
@@ -1605,7 +2021,7 @@ volume_action.add_argument(
     '--set-mode',
     action='store_true',
     required=False,
-    help='Change replication mode on specific SRC volumes ID(s) in active replication relationship to DST. Mode: Sync, Async, SnapshotsOnly. Example: --data "SnapshotsOnly;101,102,103"). Requires existing cluster and volume pairing relationships between SRC and DST. WARNING: SnapshotsOnly replicates nothing if no snapshots are enabled for remote replication (create_snapshot(enable_remote_replication=True)).')
+    help='Change replication mode on specific SRC volumes ID(s) in active replication relationship to DST. Mode: Sync, Async, SnapshotsOnly. Example: --data "SnapshotsOnly;101,102,103". Requires existing cluster and volume pairing relationships between SRC and DST. WARNING: SnapshotsOnly replicates nothing if no snapshots are enabled for remote replication (create_snapshot(enable_remote_replication=True)).')
 volume_action.add_argument(
     '--set-status',
     action='store_true',

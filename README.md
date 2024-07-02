@@ -40,6 +40,7 @@ Quite a few things and most of them sort of work. Examples:
 - Reverse replication direction for all paired volumes.
 - Change replication mode for all or selected volumes (at the source).
 - Prime the remote site using a list of volumes from the source site.
+- Resize the remote paired volume to fix size mismatch caused by Trident CSI volume resize 
 
 Each of these actions takes 1-2 seconds, so if you have a tidy and organized environment that isn't yet automated, Longhorny can hopefully save you some time. 
 
@@ -159,34 +160,40 @@ usage: longhorny.py volume [-h] [--data DATA]
                            (--list | --pair | --unpair | --prime-dst | --mismatched | --reverse | --snapshot | --set-mode | --set-status | --report)
 
 options:
-  -h, --help    show this help message and exit
-  --data DATA   Optional data input for selected volume actions (where indicated in volume action help). Not all volume actions require or accept it.
-  --list        List volumes correctly paired for replication between SRC and DST cluster. Requires paired SRC and DST clusters. Optional --data argument
-                lists specific volume pair(s).
-  --pair        Pair volumes for Async replication between SRC and DST clusters. Takes a semicolon-delimited list of volume IDs from SRC and DST in --data
-                (e.g. --data "111,555;112,600"). Requires paired SRC and DST clusters.
-  --unpair      Unpair volumes paired for replication between SRC and DST clusters. Requires paired SRC and DST clusters and at least one volume pairing
-                relationship. Takes --data argument with only one pair at a time. Ex: --data "111,555".
-  --prime-dst   Prepare DST cluster for replication by creating volumes from SRC. Creates volumes with identical properties (name, size, etc.) on DST. .
-                Takes one 2-element list of account IDs (SRC account ID,DST account ID) and another of volume IDs on SRC. Ex: --data "1,22;444,555".
-  --mismatched  Check for and report any volumes in asymmetric pair relationships (one-sided and volume size mismatch). Requires paired SRC and DST
-                clusters. Ignores --data.
-  --reverse     Reverse direction of volume replication. You should stop workloads using current SRC (readWrite) volumes before using this action as SRC
-                side will be flipped to replicationTarget and SRC iSCSI clients disconnected. Ignores --data.
-  --snapshot    Take crash-consistent snapshot of all volumes paired for replication at SRC. Use --data to specify non-default retention (1-720) in hours
-                and snapshot name (<16b string). Ex: --data "24;apple". Default: "168;long168h-snap".
-  --set-mode    Change replication mode on specific SRC volumes ID(s) in active replication relationship to DST. Mode: Sync, Async, SnapshotsOnly. Example:
-                --data "SnapshotsOnly;101,102,103"). Requires existing cluster and volume pairing relationships between SRC and DST. WARNING: SnapshotsOnly
-                replicates nothing if no snapshots are enabled for remote replication (create_snapshot(enable_remote_replication=True)).
-  --set-status  Set all SRC relationships to resume or pause state in --data. Ex: --data "pause" sets all SRC volume relationships to manual pause. --data
-                "resume" resumes paused replication at SRC. (WARNING: applies to SRC, not DST).
-  --report      TODO: Report volume pairing relationships between SRC and DST, including mismatched and bidirectional. Requires paired SRC and DST
-                clusters. Optional --data arguments: all, SRC, DST (default: all).
+  -h, --help       show this help message and exit
+  --data DATA      Optional data input for selected volume actions (where indicated in volume action help). Not all volume actions require or
+                   accept it.
+  --list           List volumes correctly paired for replication between SRC and DST cluster. Requires paired SRC and DST clusters. Optional
+                   --data argument lists specific volume pair(s).
+  --pair           Pair volumes for Async replication between SRC and DST clusters. Takes a semicolon-delimited list of volume IDs from SRC
+                   and DST in --data (e.g. --data "111,555;112,600"). Requires paired SRC and DST clusters.
+  --unpair         Unpair volumes paired for replication between SRC and DST clusters. Requires paired SRC and DST clusters and at least one
+                   volume pairing relationship. Takes --data argument with only one pair at a time. Ex: --data "111,555".
+  --prime-dst      Prepare DST cluster for replication by creating volumes from SRC. Creates volumes with identical properties (name, size,
+                   etc.) on DST. . Takes one 2-element list of account IDs (SRC account ID,DST account ID) and another of volume IDs on SRC.
+                   Ex: --data "1,22;444,555".
+  --mismatched     Check for and report any volumes in asymmetric pair relationships (one-sided and volume size mismatch). Requires paired SRC
+                   and DST clusters. Ignores --data.
+  --resize         Increase size of paired SRC and DST volumes by up to 1TiB or 2x of the original size, whichever is smaller. readWrite side
+                   must be on SRC cluster. Requires --data. Ex: "1073741824;100,200" adds 1 GiB to volume IDs SRC/100, DST/200. Default: "".
+  --upsize-remote  Increase size of paired DST volume to the same size of SRC volume, usually to allow DST to catch up with the size of SRC
+                   increased by Trident CSI. readWrite side must be on SRC side. Requires --data. Ex: --data "100,200" grows DST/200 to the
+                   size of SRC/100. Default: "0,0".
+  --reverse        Reverse direction of volume replication. You should stop workloads using current SRC (readWrite) volumes before using this
+                   action as SRC side will be flipped to replicationTarget and SRC iSCSI clients disconnected. Ignores --data.
+  --snapshot       Take crash-consistent snapshot of all volumes paired for replication at SRC. Use --data to specify non-default retention
+                   (1-720) in hours and snapshot name (<16b string). Ex: --data "24;apple". Default: "168;long168h-snap".
+  --set-mode       Change replication mode on specific SRC volumes ID(s) in active replication relationship to DST. Mode: Sync, Async,
+                   SnapshotsOnly. Example: --data "SnapshotsOnly;101,102,103". Requires existing cluster and volume pairing relationships
+                   between SRC and DST. WARNING: SnapshotsOnly replicates nothing if no snapshots are enabled for remote replication
+                   (create_snapshot(enable_remote_replication=True)).
+  --set-status     Set all SRC relationships to resume or pause state in --data. Ex: --data "pause" sets all SRC volume relationships to
+                   manual pause. --data "resume" resumes paused replication at SRC. (WARNING: applies to SRC, not DST).
+  --report         TODO: Report volume pairing relationships between SRC and DST, including mismatched and bidirectional. Requires paired SRC
+                   and DST clusters. Optional --data arguments: all, SRC, DST (default: all).
 ```
 
-Yeah, I know, I got carried away.
-
-Ok, so `list` does the same thing as it for clusters - it also lists, only volumes. Harmless. `report`, below, is equally harmless.
+`list` does the same thing as it does for clusters - it lists, only volumes. `report`, below, is equally harmless.
 
 `pair` pairs volumes. This may be disruptive! Say you have a workload on DST using Volume ID 52. Now you pair Volume ID 3 from SRC with Volume ID 52 from DST with `--pair "3,52"` and Longhorny yanks the volume from your workload at the destination site making it read-only (i.e. replicationTarget, which means read-only)! Yikes! Except Longhorny doesn't do that - it will reject to pair two volumes with the identical access property (readWrite, in this case). You'd have to set Volume ID 52 at the destination to replicationTarget before `pair` with DST/52 could do anything for you.
 
@@ -499,6 +506,30 @@ longhorny --src SRC --dst DST volume --snapshot --data "1;long1h"
 ```
 
 The main idea is to be able to roll-back locally (these snapshots are not replicated) to something before making desperate moves. Since snapshots are taken individually, if you have applications that use multiple volumes, you should stop them before running this command.
+
+**Upsize remote** volume grows the remote (specified by --dst) volume to the same size as the source (specified by --src). There's one specific use case for this, which is Trident CSI resize action lets one resize a PVC but ignores paired volume and breaks replication. `--upsize-remote` simply looks up the volume size from the source (SRC/172), grows the destination (DST/13) to the same size, and resumes replication.
+
+```sh
+longhorny volume --upsize-remote --data "172,13"
+```
+
+Filesystem size at the destination will *not* be increased by Longhorny, but since Trident CSI has increased filesystem size at the source (SRC/172) which is being replicated to the destination, the destination should have a resized filesystem
+
+**Resize** resizes both the source and destination by the byte amount specified in data string. In this case both SRC/172 and DST/13 will be grown by 1 GiB.
+
+```sh
+longhorny volume --resize --data "1073741824;172,13"
+```
+
+I didn't want to complicate the data format by adding percentage and unit options, so it's very simple like that. To grow the volume pair by 2GiB, you can do this:
+
+```sh
+longhorny volume --resize --data "$((2*1073741824));172,13"
+```
+
+The resize action has limits (edit the source code if you don't like them): volumes can't be resized by whichever is smaller: more than 1TiB at a time, or by more than 2x of their existing size. This is to prevent fat finger typos. If you have a 500 GiB volume you want to grow by 1.5 TiB (to 2 TiB), you can run `--data "$((500*1073741824));172,13"` three times in a row. That shouldn't be too exhausting.
+
+Unlike `--upsize`, resize does not benefit from filesystem resize done by Trident. You'd still have to use host-side utilities at the source to resize the filesystem to the new total size by bytes. Some filesystems can do it online, others can't. Check your filesystem documentation.
 
 ## Miscellaneous stuff
 
