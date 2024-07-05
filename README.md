@@ -197,14 +197,14 @@ options:
 
 `pair` pairs volumes. This may be disruptive! Say you have a workload on DST using Volume ID 52. Now you pair Volume ID 3 from SRC with Volume ID 52 from DST with `--pair "3,52"` and Longhorny yanks the volume from your workload at the destination site making it read-only (i.e. replicationTarget, which means read-only)! Yikes! Except Longhorny doesn't do that - it will reject to pair two volumes with the identical access property (readWrite, in this case). You'd have to set Volume ID 52 at the destination to replicationTarget before `pair` with DST/52 could do anything for you.
 
-`unpair` does the opposite from `pair`. Longhorny **cannot know if the volumes you aim to unpair are in use**. To minimize the idiotic moves (present parties excluded), Longhorny does not accept more than one unpair pair (?) at a time. `--data "1,51;2,52 volume --pair` will work, but `--data "1,51;2,52 volume --unpair` shouldn't. But you can create a Bash loop and run Longhorny if you want to unpair many pairs at once. Unpaired volumes aren't "deleted" or anything like that, they're just unpaired.
+`unpair` does the opposite from `pair`. Longhorny **cannot know if the volumes you aim to unpair are in use**. To minimize the idiotic moves (present parties excluded), Longhorny does not accept more than one unpair pair (?) at a time. `volume --pair --data "1,51;2,52` will work, but `volume --unpair --data "1,51;2,52` shouldn't. But you can create a Bash loop and run Longhorny if you want to unpair many pairs at once. Unpaired volumes aren't "deleted" or anything like that, they're just unpaired.
 
 `prime-dst` creates *new* volumes, but is a low action. As the help string says, its `DATA` format is different from regular `volume`-scope actions:
 
 - The first element is a pair of integers: Account ID at SRC and Account ID at DST, e.g. `10,20;`
 - The second is a list of integers, e.g. `101,102,103,104`: volume IDs owned by the first Account ID 10 from `--src` site
 
-Therefore, `--src SRC --dst DST --data "10,20;101,102,103,104" volume --prime-dst` would take volumes 101-104 belonging to the account ID 10 at the SRC site and create very similar (apart from volume IDs, for example) volumes for the account ID 20 at the DST site. Then we could prepare those new volumes for pairing so that the source site's volume IDs 101-104 can be paired with (say) the destination site's volume IDs 40-43 using `--data "101,40;102,41;103,42;104,43 volume --pair`. Diff-priming the destination would be useful when a bunch of volumes are added to the source side, but I don't know if anyone has that problem so I haven't attempted to solve it.
+Therefore, `--src SRC --dst DST volume --prime-dst --data "10,20;101,102,103,104"` takes volumes 101-104 belonging to the account ID 10 at the SRC site and creates very similar (apart from volume IDs, for example) volumes for the account ID 20 at the DST site. Then we could prepare those new volumes for pairing so that the source site's volume IDs 101-104 can be paired with (say) the destination site's volume IDs 40-43 using ` volume --pair --data "101,40;102,41;103,42;104,43`. Diff-priming the destination would be useful when a bunch of volumes are added to the source side, but I don't know if anyone has that problem so I haven't attempted to solve it.
 
 Note that `prime-dst` changes the new volumes at the destination to `replicationTarget`, based on the logic that most users would want to immediately pair them. If you need to flip them to readWrite mode (and later back, for pairing), see the PowerShell commands below.
 
@@ -228,7 +228,7 @@ Anyway, `DATA` setting is optional for `snapshot` action and by default snapshot
 
 `set-mode` helps you change the default (Async) to other (Sync, or SnapshotOnly) mode. SolidFire's volume-pairing API method has Async hard-coded in it, so once remote pairing has been done you may use `set-mode` to change to another and back. RTFM and the TR linked at the top for additional details.
 
-`set-status` pauses or resumes replication. If replication is going from DST=>SRC (i.e. DST side is read-write) and you need to pause replication at source if replication you would run `--src DST --dst SRC --data "pause" volume --set-status` (because DST is the source). That would put all volumes in manually paused state. Similarly, `--data "resume"` would resume. If you wanted to pause the destination (in this case, SRC)  you'd try `--src SRC --data "pause" volume --set-status`.
+`set-status` pauses or resumes replication. If replication is going from DST=>SRC (i.e. DST side is read-write) and you need to pause replication at source if replication you would run `--src DST --dst SRC volume --set-status --data "pause"` (because DST is the source). That would put all volumes in manually paused state. Similarly, `--data "resume"` would resume. If you wanted to pause the destination (in this case, SRC)  try `--src SRC volume --set-status --data "pause"`.
 
 TODO: `report` is like `list`, a completely read-only action, except that it its result is slightly different. "Slightly???" Why do we need yet another action for that? List *actually* lists volume pairing relationships, whereas `report` reports on volume pairings, and if I wanted to see what's misconfigured or broken, `report` may give me that whereas `list` may not. Given that both INs and OUTs are very different, I don't want to bloat `list` to 500 lines of code. I'm still thinking what I'd like to see and how it should be shown.
 
@@ -526,7 +526,7 @@ I didn't want to complicate the data format by adding percentage and unit option
 longhorny volume --resize --data "$((2*1073741824));172,13"
 ```
 
-The resize action has limits (edit the source code if you don't like them): volumes can't be resized by whichever is smaller: more than 1TiB at a time, or by more than 2x of their existing size. This is to prevent fat finger typos. If you have a 500 GiB volume you want to grow by 1.5 TiB (to 2 TiB), you can run `--data "$((500*1073741824));172,13"` three times in a row. That shouldn't be too exhausting.
+The resize action has limits (edit the source code if you don't like them): volumes can't be resized by whichever is smaller: more than 1TiB at a time, or by more than 2x of their existing size. This is to prevent fat finger typos. If you have a 500 GiB volume you want to grow by 1.5 TiB (to 2 TiB), you can run resize with `--data "$((500*1073741824));172,13"` three times in a row. That shouldn't be too exhausting.
 
 Unlike `--upsize`, resize does not benefit from filesystem resize done by Trident. You'd still have to use host-side utilities at the source to resize the filesystem to the new total size by bytes. Some filesystems can do it online, others can't. Check your filesystem documentation.
 
