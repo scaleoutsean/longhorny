@@ -1,8 +1,8 @@
 - [Longhorny](#longhorny)
-  - [What can it do?](#what-can-it-do)
+  - [Objectives](#objectives)
+  - [Features](#features)
   - [What you **need to know**](#what-you-need-to-know)
   - [Production use](#production-use)
-  - [Objectives](#objectives)
   - [Requirements](#requirements)
   - [How to run](#how-to-run)
     - [Optional data](#optional-data)
@@ -29,7 +29,17 @@ It grew out of my need to list cluster and volume pairs - which is something I'v
 
 The code in this repository is permissively licensed, so feel free to use and modify within the terms of the permissive Apache License 2.0. With a bit of extra work you could use the elements of this script to modify it for multi-relationship clusters or other purposes (e.g. send these to Splunk, etc.).
 
-## What can it do?
+## Objectives
+
+Longhorny's objective is to provide visibility into replicated SolidFire cluster and volume pairs - really just `list`-like actions, so that I can gather and send stuff to [SolidFire Collector](https://github.com/scaleoutsean/sfc) for SolidFire admins' viewing pleasure.
+
+Everything beyond that is extra (and maybe nice to have, assuming it works), but that's also what makes it deserve a repository of its own as it has other uses. So far I've already done more than I expected and I decided to publish the script to see if anyone has uses for other actions and/or wants to contribute.
+
+I am not committed to expanding or improving Longhorny but I may do it if I come up with new ideas for it. For example, recently I wrote a script for mapping Kubernetes/Trident volumes to SolidFire volume IDs (available in [Awesome SolidFire](https://github.com/scaleoutsean/awesome-solidfire)), so the output of that script (i.e. a list of a Kubernetes cluster's volume IDs) could be used as the input to Longhorny. Are you thinking what I'm thinking? 
+
+That, by the way, is the main reason why Longhorny doesn't output pretty tables. It's not an end in itself. Even now, most of Longhorny's output is Python lists or dictionaries that can be assigned to variables in Python shell for additional follow-up processing, but its code can be easily reused and incorporated in other scripts.
+
+## Features
 
 Quite a few things and most of them sort of work. Examples:
 
@@ -51,7 +61,7 @@ The same goes for site failover and failback. 10 seconds to failover, 10 seconds
 If you don't want to read the whole page:
 
 - There's a minimalistic tutorial in [tutorial.md](./tutorial.md)
-- If you prefer videos, there's a [5m11s video](https://rumble.com/v513r8w-project-longhorny.html) with main features
+- If you prefer videos, there's a [5m11s video](https://rumble.com/v513r8w-project-longhorny.html) with the main features
 
 ## What you **need to know**
 
@@ -63,6 +73,8 @@ Longhorny presently **requires that API access to both sites be available**. If 
 
 Currently Longhorny is not opinionated on **volume ownership**, to make experimentation easy and possible out-of-box. Since the administrator can't control account IDs, it's expected that each site will have a different account ID. But, what happens if we have multiple application clusters and need to use replicate volumes that belong to multiple accounts? That's common and Longhorny doesn't prevent you from doing that: if you tell it to pair volumes SRC/10 and DST/20, it'll do it. Or if you tell it to prime SRC Vol ID 100 that belongs to account SRC/1 for a destination account ID 7 and another from SRC/2 for DST/8, it will do that too. Then you'll have paired volumes owned by multiple tenants. So far, so good. But when you reverse replication or take a "site" snapshot, all paired volumes will be impacted as Longhorny doesn't distinguish between accounts, volume naming patterns. It could, but it's a slippery slope for a script of this scope, considering the risk of having some workloads on site A, others on site B, and failover done based on several criteria (if account ID = 7 and volume name like "pvc-"). It can be done, of course, but I'd like to see at least 1-2 other contributors so that I'm not the only person who writes and tests such workflows. So at that point Longhorny can't help you perform account scoped actions: you'd have to improve it to be able to do that, or perform such actions outside of Longhorny.
 
+If you have one or more Kubernetes clusters connected to one SolidFire cluster, check out [Kubefire](https://github.com/scaleoutsean/kubefire). Kubefire aims to provide *granular* failover for Trident PVCs owned by specific SolidFire storage accounts, so it takes cares of learning Kubernetes/Trident configuration (PVCs, PVs) and it automatically pairs and unpairs replication relationships for SolidFire volumes based on that information. Kubefire assumes you know what you're doing and can't work without inputs from Kubernetes configuration. Longhorny is more careful and isn't aware of iSCSI clients (in terms of clustering and such).
+
 ## Production use
 
 Apart from `--list` and other "no modifications" actions, I wouldn't just download Longhorny and use it in a production environment. But that doesn't mean it couldn't be used without issues. I'd recommend the following as a path to production use:
@@ -73,16 +85,6 @@ Apart from `--list` and other "no modifications" actions, I wouldn't just downlo
   - read [NetApp Element Software Remote Replication - Feature Description and Deployment Guide (TR-4741)](https://www.netapp.com/media/10607-tr4741.pdf)
   - find a small and necessary scope, test, and see if it works for you. Modify or outsource if you can't do it on your own
 - Enterprise: same as DIY, plus you can pay your systems integrator or NetApp to do that work for you
-
-## Objectives
-
-Longhorny's objective is to provide visibility into replicated SolidFire cluster and volume pairs - really just `list`-like actions, so that I can gather and send stuff to [SolidFire Collector](https://github.com/scaleoutsean/sfc) for SolidFire admins' viewing pleasure.
-
-Everything beyond that is extra (and maybe nice to have, assuming it works), but that's also what makes it deserve a repository of its own as it has other uses. So far I've already done more than I expected and I decided to publish the script to see if anyone has uses for other actions and/or wants to contribute.
-
-I am not committed to expanding or improving Longhorny but I may do it if I come up with new ideas for it. For example, recently I wrote a script for mapping Kubernetes/Trident volumes to SolidFire volume IDs (available in [Awesome SolidFire](https://github.com/scaleoutsean/awesome-solidfire)), so the output of that script (i.e. a list of a Kubernetes cluster's volume IDs) could be used as the input to Longhorny. Are you thinking what I'm thinking? 
-
-That, by the way, is the main reason why Longhorny doesn't output pretty tables. It's not an end in itself. Even now, most of Longhorny's output is Python lists or dictionaries that can be assigned to variables in Python shell for additional follow-up processing, but its code can be easily reused and incorporated in other scripts.
 
 ## Requirements
 
@@ -126,9 +128,9 @@ Some volume and site actions require or may accept `--data DATA`. Example:
 longhorny --src SRC --dst volume --list --data "135,230"
 ```
 
-Without `--data`, all paired volumes get listed. If you have dozens and want to check just one pair, then that's the way
+Without `--data`, all paired volumes get listed. Longhorny supports only one cluster pair, but if you have dozens of replication-ready volumes and want to pair them all at once `--data "135,230;136,231"` will do it.
 
-Data format for `DATA` varies depending on action, but scope help (`volume -h`, `site -h`) has examples whenever `--data` argument is available or required. See more in [Command examples](#command-examples).
+Data format for `DATA` varies depending on the action, but scope-level help (`volume -h`, `site -h`) has examples for whenever `--data` argument is available or required. See more in [Command examples](#command-examples).
 
 ### Cluster-scope actions
 
@@ -150,7 +152,7 @@ options:
 
 `pair` changes cluster configuration on both sides: SRC gets paired with DST. No data is destroyed, but if this action succeeds SRC and DST (clusters) will be in a paired relationship.
 
-`unpair` does the opposite from `pair`. It also changes cluster configuration on both sides (by removing the sole cluster pairing relationship), so be very careful if you have replication relationships set up - you shouldn't be able to `unpair` if there is at least one valid volumes replication pair, but be careful nevertheless.
+`unpair` does the opposite from `pair`. It also changes cluster configuration on both sides (by removing the sole cluster pairing relationship), so be very careful if you have replication relationships set up - you shouldn't be able to `unpair` clusters if there is at least one valid volumes replication pair, but be careful nevertheless.
 
 ### Volume-scope actions
 
@@ -189,15 +191,16 @@ options:
                    (create_snapshot(enable_remote_replication=True)).
   --set-status     Set all SRC relationships to resume or pause state in --data. Ex: --data "pause" sets all SRC volume relationships to
                    manual pause. --data "resume" resumes paused replication at SRC. (WARNING: applies to SRC, not DST).
-  --report         TODO: Report volume pairing relationships between SRC and DST, including mismatched and bidirectional. Requires paired SRC
-                   and DST clusters. Optional --data arguments: all, SRC, DST (default: all).
+  --report         Report volume pairing relationships between SRC and DST, including mismatched and bidirectional relationships.
+                   Optional --data "id1,id2" filters the report to any relationship involving those IDs.
+                   Requires paired SRC and DST clusters.
 ```
 
-`list` does the same thing as it does for clusters - it lists, only volumes. `report`, below, is equally harmless.
+`list` does the same thing as it does for clusters - it lists, only volumes. `report`, below, is a more detailed view that compares properties across the pair.
 
-`pair` pairs volumes. This may be disruptive! Say you have a workload on DST using Volume ID 52. Now you pair Volume ID 3 from SRC with Volume ID 52 from DST with `--pair "3,52"` and Longhorny yanks the volume from your workload at the destination site making it read-only (i.e. replicationTarget, which means read-only)! Yikes! Except Longhorny doesn't do that - it will reject to pair two volumes with the identical access property (readWrite, in this case). You'd have to set Volume ID 52 at the destination to replicationTarget before `pair` with DST/52 could do anything for you.
+`pair` pairs volumes for replication which starts automatically if pairing succeeds. This may be disruptive! Say you have a workload on DST using Volume ID 52. Now you pair Volume ID 3 from SRC with Volume ID 52 from DST with `--pair "3,52"` and Longhorny yanks the volume from your workload at the destination site making it read-only (i.e. replicationTarget, which means read-only)! Yikes! Except Longhorny doesn't do that - it will reject pairing two volumes with the identical access property (readWrite, in this case). You'd have to set Volume ID 52 at the destination to replicationTarget before `pair`ing with DST/52 could work.
 
-`unpair` does the opposite from `pair`. Longhorny **cannot know if the volumes you aim to unpair are in use**. To minimize the idiotic moves (present parties excluded), Longhorny does not accept more than one unpair pair (?) at a time. `volume --pair --data "1,51;2,52` will work, but `volume --unpair --data "1,51;2,52` shouldn't. But you can create a Bash loop and run Longhorny if you want to unpair many pairs at once. Unpaired volumes aren't "deleted" or anything like that, they're just unpaired.
+`unpair` does the opposite from `pair`. Longhorny **does not know if the volumes you aim to unpair are in use**. To minimize mistakes Longhorny does not accept more than one unpair pair (?) at a time. `volume --pair --data "1,51;2,52` will work, but `volume --unpair --data "1,51;2,52` shouldn't. But you can create a Bash loop and run Longhorny if you want to unpair many pairs at once. Unpaired volumes aren't "deleted" or anything like that, they're just unpaired.
 
 `prime-dst` creates *new* volumes, but is a low action. As the help string says, its `DATA` format is different from regular `volume`-scope actions:
 
@@ -230,7 +233,7 @@ Anyway, `DATA` setting is optional for `snapshot` action and by default snapshot
 
 `set-status` pauses or resumes replication. If replication is going from DST=>SRC (i.e. DST side is read-write) and you need to pause replication at source if replication you would run `--src DST --dst SRC volume --set-status --data "pause"` (because DST is the source). That would put all volumes in manually paused state. Similarly, `--data "resume"` would resume. If you wanted to pause the destination (in this case, SRC)  try `--src SRC volume --set-status --data "pause"`.
 
-TODO: `report` is like `list`, a completely read-only action, except that it its result is slightly different. "Slightly???" Why do we need yet another action for that? List *actually* lists volume pairing relationships, whereas `report` reports on volume pairings, and if I wanted to see what's misconfigured or broken, `report` may give me that whereas `list` may not. Given that both INs and OUTs are very different, I don't want to bloat `list` to 500 lines of code. I'm still thinking what I'd like to see and how it should be shown.
+`report` is like `list`, a completely read-only action, except that it its result is slightly different. "Slightly???" Why do we need yet another action for that? List *actually* lists volume pairing relationships, whereas `report` reports on volume pairings, and if I wanted to see what's misconfigured or broken, `report` may give me that whereas `list` may not. Given that both INs and OUTs are very different, I don't want to bloat `list` to 500 lines of code. I'm still thinking what I'd like to see and how it should be shown.
 
 ### Site-scope actions
 
@@ -267,9 +270,10 @@ But more importantly, I wouldn't suggest to anyone to use Longhorny on real clus
 ### Some --data examples
 
 ```sh
-~$ volume --src SRC --dst DST --list --data "111,222"           # list only SRC/DST pair 111,222
-~$ volume --src SRC --dst DST --prime-dst --data "1,10;333,444" # use SRC-side Account ID 1's volumes 333 and 444 as templates for priming Account 10 on DST site
-~$ volume --src SRC --dst DST --snapshot --data "1;test"        # take a snapshot of all paired SRC volumes, retain for 1 hour, and name each "test"
+--src SRC --dst DST volume --list --data "111,222"           # list only SRC/DST pair 111,222
+--src SRC --dst DST volume --prime-dst --data "1,10;333,444" # use SRC-side Account ID 1's volumes 333 and 444 as templates for priming Account 10 on DST site
+--src SRC --dst DST volume --snapshot --data "1;test"        # take a snapshot of all paired SRC volumes, retain for 1 hour, and name each "test"
+--src SRC --dst DST volume --report --data "40,41"           # report *any* replication relationships involving these volume IDs wherever they are (on SRC or DST)
 ```
 
 ### Cluster-level

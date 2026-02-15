@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# sfc.py
+# longhorny.py
 
 ###############################################################################
 # Synopsis:                                                                   #
@@ -24,10 +24,12 @@ import time
 import argparse
 import ast
 import datetime
+import hashlib
 import logging
 import os
 import pprint
 from getpass import getpass
+from tabulate import tabulate
 from solidfire.factory import ElementFactory
 from solidfire import common
 from solidfire.common import LOG
@@ -244,12 +246,15 @@ def volume(args):
     elif args.report:
         try:
             if args.data is None or args.data == '':
-                logging.error(
-                    "No data provided for volume report customization. Using default value: [].")
-                report_data = {}
+                logging.warning(
+                    "No data provided for volume report customization. Reporting on all paired volumes.")
+                report_data = []
             else:
-                report_data = {}
-                pass
+                try:
+                    report_data = [int(i) for i in args.data.split(',')]
+                except ValueError:
+                    logging.warning("Data provided for report is not a list of volume IDs. Reporting on all paired volumes.")
+                    report_data = []
             report_volume_replication_status(src, dst, report_data)
         except Exception as e:
             logging.error("Error: " + str(e))
@@ -329,15 +334,189 @@ def volume(args):
     return
 
 
+def deterministic_color(value):
+    """
+    Returns the string value wrapped in TrueColor (24-bit) ANSI escape codes.
+    The color is derived deterministically from the hash of the value.
+    """
+    if value is None:
+        return "None"
+    val_str = str(value)
+    # Generate hash for the string representation of the value
+    h = hashlib.md5(val_str.encode('utf-8')).hexdigest()
+    
+    # Extract RGB components from the start of the hex hash
+    r = int(h[0:2], 16)
+    g = int(h[2:4], 16)
+    b = int(h[4:6], 16)
+    
+    # Ensure the color isn't too dark for readability on typical dark-mode terminals
+    # Perceived luminance: 0.299*R + 0.587*G + 0.114*B
+    if (r * 0.299 + g * 0.587 + b * 0.114) < 70:
+        r = min(255, r + 60)
+        g = min(255, g + 60)
+        b = min(255, b + 60)
+        
+    return f"\x1b[38;2;{r};{g};{b}m{val_str}\x1b[0m"
+
+
 def report_volume_replication_status(
-        src: dict, dst: dict, report_data: dict) -> dict:
+        src: dict, dst: dict, report_data: list) -> dict:
     """
     Print out volume replication report in dictionary format.
     """
-    print(
-        "TODO: report_volume_replication_status using report_data: " +
-        str(report_data))
-    return
+    logging.info("Generating volume replication status report.")
+
+    try:
+        # Get cluster pairing info to identify which cluster is which in the relationships
+        src_cluster_pairs = src['sfe'].list_cluster_pairs().to_json()['clusterPairs']
+        dst_cluster_pairs = dst['sfe'].list_cluster_pairs().to_json()['clusterPairs']
+        
+        # We need identifying info for the pairings
+        src_cluster_pair_ids = [cp['clusterPairID'] for cp in src_cluster_pairs if cp['clusterName'] == dst['clusterName']]
+        if not src_cluster_pair_ids:
+            logging.warning(f"No cluster pairing found from {src['clusterName']} to {dst['clusterName']}")
+
+        # Get all paired volumes on both sides
+        params_paired = {'isPaired': True}
+        src_vol_paired = src['sfe'].invoke_sfapi(method='ListVolumes', parameters=params_paired)['volumes']
+        dst_vol_paired = dst['sfe'].invoke_sfapi(method='ListVolumes', parameters=params_paired)['volumes']
+        
+        # Get all volumes on both sides to check for orphans/existence
+        src_vol_all = src['sfe'].invoke_sfapi(method='ListVolumes')['volumes']
+        dst_vol_all = dst['sfe'].invoke_sfapi(method='ListVolumes')['volumes']
+        
+        src_vol_all_dict = {v['volumeID']: v for v in src_vol_all}
+        dst_vol_all_dict = {v['volumeID']: v for v in dst_vol_all}
+        
+        report_table = []
+        
+        # We'll iterate through all volumes that are paired on either side
+        # First, process things from SRC perspective
+        seen_pairs = set() # (src_id, dst_id)
+
+        for v in src_vol_paired:
+            for vp in v.get('volumePairs', []):
+                # Filter for pairs with our target DST cluster
+                if vp['clusterPairID'] in src_cluster_pair_ids or not src_cluster_pair_ids:
+                    src_id = v['volumeID']
+                    dst_id = vp['remoteVolumeID']
+                    seen_pairs.add((src_id, dst_id))
+                    
+                    # Find matching pair on DST
+                    dst_vol = dst_vol_all_dict.get(dst_id)
+                    dst_paired = False
+                    if dst_vol and dst_vol.get('volumePairs'):
+                        for dvp in dst_vol['volumePairs']:
+                            if dvp['remoteVolumeID'] == src_id:
+                                dst_paired = True
+                                break
+                    
+                    # Determine direction and state
+                    local_mode = v['access']
+                    remote_mode = dst_vol['access'] if dst_vol else "MISSING"
+                    
+                    direction = "Unknown"
+                    if local_mode == 'readWrite' and remote_mode == 'replicationTarget':
+                        direction = f"{src['clusterName']} -> {dst['clusterName']}"
+                    elif local_mode == 'replicationTarget' and remote_mode == 'readWrite':
+                        direction = f"{dst['clusterName']} -> {src['clusterName']}"
+                    elif local_mode == 'readWrite' and remote_mode == 'readWrite':
+                        direction = f"!!! BOTH {src['clusterName']}/{dst['clusterName']} readWrite !!!"
+                    elif local_mode == 'replicationTarget' and remote_mode == 'replicationTarget':
+                        direction = f"!!! BOTH {src['clusterName']}/{dst['clusterName']} replicationTarget !!!"
+
+                    status = vp['remoteReplication']['state']
+                    mode = vp['remoteReplication']['mode']
+                    
+                    size_src = v['totalSize']
+                    size_dst = dst_vol['totalSize'] if dst_vol else 0
+                    size_diff = size_src - size_dst
+                    
+                    report_table.append({
+                        'SRC ID': src_id,
+                        'DST ID': dst_id,
+                        'Direction': direction,
+                        'Status': status,
+                        'RepMode': mode,
+                        'SRC Size': size_src,
+                        'DST Size': size_dst,
+                        'Diff': size_diff,
+                        'Mutual': "Yes" if dst_paired else "NO (One-sided)"
+                    })
+
+        # Process things paired on DST but not seen from SRC
+        for v in dst_vol_paired:
+            for vp in v.get('volumePairs', []):
+                dst_id = v['volumeID']
+                src_id = vp['remoteVolumeID']
+                
+                if (src_id, dst_id) not in seen_pairs:
+                    # This is an orphan or pair missing on SRC
+                    src_vol = src_vol_all_dict.get(src_id)
+                    
+                    report_table.append({
+                        'SRC ID': src_id,
+                        'DST ID': dst_id,
+                        'Direction': "ORPHAN (on DST)",
+                        'Status': vp['remoteReplication']['state'],
+                        'RepMode': vp['remoteReplication']['mode'],
+                        'SRC Size': src_vol['totalSize'] if src_vol else 0,
+                        'DST Size': v['totalSize'],
+                        'Diff': (src_vol['totalSize'] if src_vol else 0) - v['totalSize'],
+                        'Mutual': "NO (One-sided)"
+                    })
+
+        # Apply filtering if specific volume IDs were requested
+        if report_data:
+            report_table = [row for row in report_table if row['SRC ID'] in report_data or row['DST ID'] in report_data]
+
+        if not report_table:
+            if report_data:
+                print(f"\nNo volume replication pairs matching {report_data} found between {src['clusterName']} and {dst['clusterName']}.\n")
+            else:
+                print(f"\nNo volume replication pairs found between {src['clusterName']} and {dst['clusterName']}.\n")
+        else:
+            # Colorize the table for display
+            colorized_table = []
+            src_n = deterministic_color(src['clusterName'])
+            dst_n = deterministic_color(dst['clusterName'])
+            
+            for row in report_table:
+                # Build direction with colorized cluster names
+                raw_dir = row['Direction']
+                if " -> " in raw_dir:
+                    parts = raw_dir.split(" -> ")
+                    color_dir = f"{deterministic_color(parts[0])} -> {deterministic_color(parts[1])}"
+                elif "ORPHAN" in raw_dir:
+                    color_dir = deterministic_color(raw_dir)
+                elif "BOTH" in raw_dir:
+                    color_dir = f"\x1b[31m{raw_dir}\x1b[0m" # Red warning
+                else:
+                    color_dir = raw_dir
+
+                colorized_table.append({
+                    'SRC ID': deterministic_color(row['SRC ID']),
+                    'DST ID': deterministic_color(row['DST ID']),
+                    'Direction': color_dir,
+                    'Status': deterministic_color(row['Status']),
+                    'RepMode': deterministic_color(row['RepMode']),
+                    'SRC Size': row['SRC Size'],
+                    'DST Size': row['DST Size'],
+                    'Diff': row['Diff'],
+                    'Mutual': deterministic_color(row['Mutual'])
+                })
+
+            print(f"\nVOLUME REPLICATION REPORT: {src['clusterName']} <-> {dst['clusterName']}")
+            print(tabulate(colorized_table, headers="keys", tablefmt="pretty"))
+            print("")
+
+    except Exception as e:
+        logging.error(f"Error generating volume replication report: {e}")
+        # Not exiting here to allow other operations if called in a loop, but usually it's a fatal error for this action
+        raise
+
+    return {}
 
 
 def snapshot_site(src: dict, dst: dict, snap_data: list) -> dict:
@@ -1607,7 +1786,7 @@ def reverse_replication(src: dict, dst: dict) -> dict:
                 exit(200)
         else:
             logging.warning(
-                "Many volumes found, pause, reversal and resume will be done one by one. Volume count: " +
+                "Many volumes have found. Pause, reversal and resume will be done one by one. Volume count: " +
                 str(
                     len(paired_volumes)) +
                 ".")
@@ -1991,7 +2170,7 @@ volume_action.add_argument(
     '--prime-dst',
     action='store_true',
     required=False,
-    help='Prepare DST cluster for replication by creating volumes from SRC. Creates volumes with identical properties (name, size, etc.) on DST. . Takes one 2-element list of account IDs (SRC account ID,DST account ID) and another of volume IDs on SRC. Ex:  --data "1,22;444,555".')
+    help='Prepare DST cluster for replication by creating volumes from SRC. Creates volumes with identical properties (name, size, etc.) on DST. Takes one 2-element list of account IDs (account ID at SRC, DST) and another of one or more volume IDs from SRC. Ex:  --data "1,22;444,555".')
 volume_action.add_argument(
     '--mismatched',
     action='store_true',
@@ -2031,7 +2210,7 @@ volume_action.add_argument(
     '--report',
     action='store_true',
     required=False,
-    help='TODO: Report volume pairing relationships between SRC and DST, including mismatched and bidirectional. Requires paired SRC and DST clusters. Optional --data arguments: all, SRC, DST (default: all).')
+help='Report volume pairing relationships between SRC and DST, including mismatched and bidirectional. Requires paired SRC and DST clusters.')
 
 volume_parser.set_defaults(func=volume)
 
